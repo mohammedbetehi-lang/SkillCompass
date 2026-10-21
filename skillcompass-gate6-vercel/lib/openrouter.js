@@ -1,5 +1,5 @@
 // lib/openrouter.js
-// Free-model only: never automatically switch to a paid model.
+// Uses the model exactly as configured (free or paid). No forced :free suffix.
 
 const OPENROUTER_URL =
   'https://openrouter.ai/api/v1/chat/completions';
@@ -23,7 +23,8 @@ async function callOpenRouter({
   referer,
   title
 }) {
-  const freeModel = toFreeVariant(model);
+  // Use the configured model as-is (do NOT force a :free variant).
+  const modelToUse = model;
 
   const resp = await fetch(OPENROUTER_URL, {
     method: 'POST',
@@ -34,7 +35,7 @@ async function callOpenRouter({
       ...(title ? { 'X-Title': title } : {}),
     },
     body: JSON.stringify({
-      model: freeModel,
+      model: modelToUse,
       messages,
       max_tokens: maxTokens,
       ...(temperature !== undefined ? { temperature } : {}),
@@ -43,7 +44,7 @@ async function callOpenRouter({
 
   return {
     resp,
-    modelUsed: freeModel,
+    modelUsed: modelToUse,
     usedFallback: false
   };
 }
