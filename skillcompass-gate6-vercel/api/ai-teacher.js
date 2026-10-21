@@ -5,7 +5,7 @@ const { resolveLesson } = require('../lib/curriculum');
 const { checkScope }    = require('../lib/scopeGuard');
 const { callOpenRouter } = require('../lib/openrouter');
 
-const TUTOR_MODEL      = process.env.OPENROUTER_MODEL || 'qwen/qwen3-8b';
+const TUTOR_MODEL      = process.env.OPENROUTER_MODEL || 'qwen/qwen3.7-plus';
 const CLASSIFIER_MODEL = process.env.OPENROUTER_CLASSIFIER_MODEL || TUTOR_MODEL;
 
 function outOfScopeMessage(skillName, lessonTitle) {
