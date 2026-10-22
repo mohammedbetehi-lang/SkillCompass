@@ -129,6 +129,78 @@ function buildSimContextPrompt(simContext) {
   return '\n\n' + lines.join('\n');
 }
 
+function extractTextContent(content) {
+  if (typeof content === 'string') return content.trim();
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (!part || typeof part !== 'object') return '';
+        if (['text', 'output_text'].includes(part.type) && typeof part.text === 'string') {
+          return part.text;
+        }
+        return typeof part.text === 'string' && !String(part.type || '').includes('reasoning')
+          ? part.text
+          : '';
+      })
+      .filter(Boolean)
+      .join('\n')
+      .trim();
+  }
+  if (content && typeof content === 'object' && typeof content.text === 'string') {
+    return content.text.trim();
+  }
+  return '';
+}
+
+function extractOpenRouterAnswer(data) {
+  const choices = Array.isArray(data?.choices) ? data.choices : [];
+  for (const choice of choices) {
+    const message = choice?.message;
+    const standardAnswer = extractTextContent(message?.content);
+    if (standardAnswer) return standardAnswer;
+
+    const refusal = typeof message?.refusal === 'string' ? message.refusal.trim() : '';
+    if (refusal) return refusal;
+
+    const legacyAnswer = extractTextContent(choice?.text);
+    if (legacyAnswer) return legacyAnswer;
+  }
+
+  const responsesAnswer = extractTextContent(data?.output_text);
+  if (responsesAnswer) return responsesAnswer;
+
+  if (Array.isArray(data?.output)) {
+    const outputText = data.output
+      .filter((item) => item && (item.type === 'message' || item.role === 'assistant'))
+      .map((item) => extractTextContent(item.content))
+      .filter(Boolean)
+      .join('\n')
+      .trim();
+    if (outputText) return outputText;
+  }
+
+  return '';
+}
+
+function getOpenRouterDiagnostics(data, rawBody, contentType) {
+  const choice = data?.choices?.[0];
+  const message = choice?.message;
+  const content = message?.content;
+  return {
+    responseBytes: Buffer.byteLength(rawBody || '', 'utf8'),
+    contentType: contentType || null,
+    topLevelFields: data && typeof data === 'object' ? Object.keys(data).slice(0, 20) : [],
+    model: typeof data?.model === 'string' ? data.model : null,
+    choiceCount: Array.isArray(data?.choices) ? data.choices.length : 0,
+    finishReason: choice?.finish_reason || null,
+    messageFields: message && typeof message === 'object' ? Object.keys(message).slice(0, 20) : [],
+    contentTypeInMessage: Array.isArray(content) ? 'array' : typeof content,
+    contentLength: typeof content === 'string' ? content.length : null,
+    reasoningPresent: typeof message?.reasoning === 'string' && message.reasoning.length > 0,
+  };
+}
+
 module.exports = async (req, res) => {
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Method not allowed. Use POST.' });
@@ -211,10 +283,41 @@ module.exports = async (req, res) => {
       return;
     }
 
-    const data   = await resp.json();
-    const answer = data?.choices?.[0]?.message?.content || '';
+    const rawBody = await resp.text();
+    let data;
+    try {
+      data = JSON.parse(rawBody);
+    } catch {
+      res.status(502).json({
+        error: 'OpenRouter returned an invalid JSON response.',
+        diagnostics: {
+          responseBytes: Buffer.byteLength(rawBody, 'utf8'),
+          contentType: resp.headers?.get('content-type') || null,
+        },
+      });
+      return;
+    }
+
+    const answer = extractOpenRouterAnswer(data);
+    if (!answer) {
+      const diagnostics = getOpenRouterDiagnostics(
+        data,
+        rawBody,
+        resp.headers?.get('content-type')
+      );
+      console.error('OpenRouter returned no extractable assistant text', diagnostics);
+      res.status(502).json({
+        error: 'OpenRouter returned an empty assistant response.',
+        diagnostics,
+      });
+      return;
+    }
+
     res.status(200).json({ allowed: true, answer, usedPaidFallback: usedFallback });
   } catch (err) {
     res.status(500).json({ error: `Server error: ${err.message}` });
   }
 };
+
+module.exports.extractOpenRouterAnswer = extractOpenRouterAnswer;
+module.exports.getOpenRouterDiagnostics = getOpenRouterDiagnostics;
