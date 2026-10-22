@@ -129,26 +129,28 @@ function buildSimContextPrompt(simContext) {
   return '\n\n' + lines.join('\n');
 }
 
-function extractTextContent(content) {
+function extractTextContent(content, depth = 0) {
+  if (depth > 8) return '';
   if (typeof content === 'string') return content.trim();
   if (Array.isArray(content)) {
     return content
-      .map((part) => {
-        if (typeof part === 'string') return part;
-        if (!part || typeof part !== 'object') return '';
-        if (['text', 'output_text'].includes(part.type) && typeof part.text === 'string') {
-          return part.text;
-        }
-        return typeof part.text === 'string' && !String(part.type || '').includes('reasoning')
-          ? part.text
-          : '';
-      })
+      .map((part) => extractTextContent(part, depth + 1))
       .filter(Boolean)
       .join('\n')
       .trim();
   }
-  if (content && typeof content === 'object' && typeof content.text === 'string') {
-    return content.text.trim();
+  if (content && typeof content === 'object') {
+    const type = String(content.type || '').toLowerCase();
+    if (type.includes('reasoning')) return '';
+    if (typeof content.text === 'string' && content.text.trim()) return content.text.trim();
+
+    // Some provider responses wrap text in content/parts/value objects instead
+    // of returning message.content as a string. Traverse only text-bearing keys;
+    // never read reasoning fields into the user-visible answer.
+    for (const key of ['output_text', 'content', 'parts', 'segments', 'value']) {
+      const nestedText = extractTextContent(content[key], depth + 1);
+      if (nestedText) return nestedText;
+    }
   }
   return '';
 }
@@ -197,6 +199,9 @@ function getOpenRouterDiagnostics(data, rawBody, contentType) {
     messageFields: message && typeof message === 'object' ? Object.keys(message).slice(0, 20) : [],
     contentTypeInMessage: Array.isArray(content) ? 'array' : typeof content,
     contentLength: typeof content === 'string' ? content.length : null,
+    contentObjectKeys: content && typeof content === 'object' && !Array.isArray(content)
+      ? Object.keys(content).filter((key) => !key.toLowerCase().includes('reasoning')).slice(0, 20)
+      : [],
     reasoningPresent: typeof message?.reasoning === 'string' && message.reasoning.length > 0,
   };
 }
@@ -272,7 +277,10 @@ module.exports = async (req, res) => {
         { role: 'system', content: systemPrompt },
         { role: 'user',   content: question },
       ],
-      maxTokens: 600,
+      // Qwen 3.7 Plus may spend a substantial part of the completion budget
+      // on reasoning; 600 tokens caused finish_reason="length" before it
+      // emitted user-facing text in production.
+      maxTokens: 1600,
       referer: process.env.PUBLIC_SITE_URL || 'https://skillcompass.example',
       title: 'SkillCompass AI Teacher',
     });
