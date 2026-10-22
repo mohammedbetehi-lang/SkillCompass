@@ -277,10 +277,11 @@ module.exports = async (req, res) => {
         { role: 'system', content: systemPrompt },
         { role: 'user',   content: question },
       ],
-      // Qwen 3.7 Plus may spend a substantial part of the completion budget
-      // on reasoning; 600 tokens caused finish_reason="length" before it
-      // emitted user-facing text in production.
-      maxTokens: 1600,
+      // Reasoning tokens share max_tokens with visible text. Cap internal
+      // reasoning so the model can finish a short answer within Vercel's
+      // configured 30-second function duration.
+      maxTokens: 900,
+      reasoning: { max_tokens: 192, exclude: true },
       referer: process.env.PUBLIC_SITE_URL || 'https://skillcompass.example',
       title: 'SkillCompass AI Teacher',
     });
