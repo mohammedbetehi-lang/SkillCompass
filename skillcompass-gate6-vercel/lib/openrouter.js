@@ -19,6 +19,7 @@ async function callOpenRouter({
   model,
   messages,
   maxTokens,
+  reasoning,
   temperature,
   referer,
   title
@@ -38,6 +39,7 @@ async function callOpenRouter({
       model: modelToUse,
       messages,
       max_tokens: maxTokens,
+      ...(reasoning ? { reasoning } : {}),
       ...(temperature !== undefined ? { temperature } : {}),
     }),
   });
