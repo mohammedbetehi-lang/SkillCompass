@@ -490,8 +490,44 @@ module.exports = async (req, res) => {
     }
 
     if (!answer) {
-      // الرد فارغ أو بنية غير متوقعة — نُبلّغ الواجهة بخطأ بدون كشف تفاصيل الخادم
-      res.status(200).json({ error: 'empty_response' });
+      // تشخيص آمن: لا نسجل السؤال أو محتوى reasoning أو أي أسرار.
+      const choice = data?.choices?.[0];
+      const message = choice?.message || {};
+      const rawContent = message.content;
+      const usage = data?.usage || {};
+      const debugId = String(data?.id || `empty_${Date.now()}`);
+      console.error('[ai-teacher] empty_response diagnostic:', JSON.stringify({
+        event: 'ai_diag',
+        debug_id: debugId,
+        model: data?.model || TUTOR_MODEL,
+        finish_reason: choice?.finish_reason || null,
+        native_finish_reason: choice?.native_finish_reason || null,
+        has_content: typeof rawContent === 'string'
+          ? rawContent.length > 0
+          : Array.isArray(rawContent) ? rawContent.length > 0 : false,
+        content_type: Array.isArray(rawContent) ? 'array' : typeof rawContent,
+        content_length: typeof rawContent === 'string'
+          ? rawContent.length
+          : Array.isArray(rawContent) ? rawContent.reduce((n, part) =>
+              n + (typeof part?.text === 'string' ? part.text.length : 0), 0) : null,
+        has_reasoning: typeof message.reasoning === 'string' && message.reasoning.length > 0,
+        reasoning_length: typeof message.reasoning === 'string' ? message.reasoning.length : null,
+        has_refusal: typeof message.refusal === 'string' && message.refusal.length > 0,
+        refusal_length: typeof message.refusal === 'string' ? message.refusal.length : null,
+        usage: {
+          prompt_tokens: usage.prompt_tokens ?? null,
+          completion_tokens: usage.completion_tokens ?? null,
+          reasoning_tokens: usage.completion_tokens_details?.reasoning_tokens ?? null
+        },
+        choices_count: Array.isArray(data?.choices) ? data.choices.length : 0,
+        system_prompt_length: systemPrompt.length
+      }));
+      res.status(200).json({
+        allowed: true,
+        answer: 'المعلم الذكي مشغول حاليًا ولا يمكنه الرد. أعد المحاولة بعد دقيقة، أو جرّب إعادة صياغة السؤال. إذا استمرت المشكلة، تواصل مع الدعم.',
+        fallback: true,
+        debug_id: debugId
+      });
       return;
     }
 
