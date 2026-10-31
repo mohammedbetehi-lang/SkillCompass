@@ -44,6 +44,10 @@ const DIRECT_LESSON_CONCEPTS = {
     'قبل شراء مخزون', 'قبل شراء كميات', 'قبل شراء كمية',
     'قبل تخزين المنتج', 'اختبار السوق', 'التحقق من السوق',
     'اختبار اهتمام العملاء', 'قياس اهتمام العملاء',
+    'اهتمام العملاء بمنتج', 'اهتمام الزبائن بمنتج',
+    'التحقق من اهتمام العملاء', 'كيف أتحقق من اهتمام العملاء',
+    'دروب شيبينغ', 'ما معنى الدروب شيبينغ', 'ما هو الدروب شيبينغ',
+    'dropshipping', 'drop shipping',
     'طلب مسبق', 'طلبات مسبقة', 'preorder', 'pre-order',
     'validate product demand', 'product demand validation'
   ]
@@ -76,6 +80,11 @@ function normalize(text) {
 function containsAny(haystack, needles) {
   const h = normalize(haystack);
   return needles.some((n) => h.includes(normalize(n)));
+}
+
+function isDirectLessonConcept(skillId, lessonId, question) {
+  const concepts = DIRECT_LESSON_CONCEPTS[`${skillId}:${Number(lessonId)}`] || [];
+  return containsAny(question, concepts);
 }
 
 async function classifyWithModel({
@@ -146,8 +155,7 @@ async function checkScope({
 
   // Explicit concepts belonging to this exact lesson bypass classifier false negatives.
   // The match is lesson-specific; it does not widen access to unrelated track topics.
-  const directConcepts = DIRECT_LESSON_CONCEPTS[`${skillId}:${Number(lessonId)}`] || [];
-  if (containsAny(question, directConcepts)) {
+  if (isDirectLessonConcept(skillId, lessonId, question)) {
     return {
       allowed: true,
       skillName: lesson.skillName,
@@ -192,4 +200,4 @@ async function checkScope({
   }
 }
 
-module.exports = { checkScope, OFF_TOPIC_BLOCKLIST };
+module.exports = { checkScope, OFF_TOPIC_BLOCKLIST, isDirectLessonConcept };
