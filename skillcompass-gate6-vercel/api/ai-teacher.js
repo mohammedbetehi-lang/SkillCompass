@@ -452,7 +452,8 @@ module.exports = async (req, res) => {
         { role: 'system', content: systemPrompt },
         { role: 'user',   content: question },
       ],
-      maxTokens: 600,
+      maxTokens: 8192,
+      reasoning: { effort: 'low' },
       referer: process.env.PUBLIC_SITE_URL || 'https://skillcompass.example',
       title: 'SkillCompass AI Teacher',
     });
