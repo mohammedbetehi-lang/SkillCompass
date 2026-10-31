@@ -37,6 +37,18 @@ const SIM_SPECIFIC_KEYWORDS = {
   ],
 };
 
+const DIRECT_LESSON_CONCEPTS = {
+  'ecommerce:1': [
+    'اختبار الطلب', 'اختبر الطلب', 'التحقق من الطلب',
+    'قياس الطلب على المنتج', 'الطلب على منتج',
+    'قبل شراء مخزون', 'قبل شراء كميات', 'قبل شراء كمية',
+    'قبل تخزين المنتج', 'اختبار السوق', 'التحقق من السوق',
+    'اختبار اهتمام العملاء', 'قياس اهتمام العملاء',
+    'طلب مسبق', 'طلبات مسبقة', 'preorder', 'pre-order',
+    'validate product demand', 'product demand validation'
+  ]
+};
+
 const OFF_TOPIC_BLOCKLIST = [
   'الطقس', 'طقس اليوم',
   'اكتب لي كود', 'اكتب كود', 'برمجة بايثون', 'برمجة جافا سكريبت',
@@ -129,6 +141,19 @@ async function checkScope({
       lessonTitle: lesson.lessonTitle,
       stage: 'blocklist',
       reason: 'off_topic_blocklist_match',
+    };
+  }
+
+  // Explicit concepts belonging to this exact lesson bypass classifier false negatives.
+  // The match is lesson-specific; it does not widen access to unrelated track topics.
+  const directConcepts = DIRECT_LESSON_CONCEPTS[`${skillId}:${Number(lessonId)}`] || [];
+  if (containsAny(question, directConcepts)) {
+    return {
+      allowed: true,
+      skillName: lesson.skillName,
+      lessonTitle: lesson.lessonTitle,
+      stage: 'direct_lesson_concept',
+      reason: 'curated_lesson_concept_match',
     };
   }
 
