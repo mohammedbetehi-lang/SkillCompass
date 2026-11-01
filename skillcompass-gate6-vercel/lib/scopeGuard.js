@@ -10,6 +10,7 @@
 //   Stage 2 — isolated classifier model call; fails closed on errors.
 
 const { resolveLesson } = require('./curriculum');
+const { resolveLessonContent } = require('./lessonContent');
 const { callOpenRouter } = require('./openrouter');
 
 const SIM_SPECIFIC_KEYWORDS = {
@@ -307,6 +308,7 @@ ${String(lessonContent || '').slice(0, 2200)}
 async function checkScope({
   skillId, lessonId, question, apiKey, classifierModel,
   simulationMode = false,
+  classifier = classifyWithModel,
 }) {
   const lesson = resolveLesson(skillId, lessonId);
   if (!lesson) return { allowed: false, error: 'unknown_skill_or_lesson' };
@@ -345,7 +347,7 @@ async function checkScope({
   const keywordCandidate = containsAny(question, allKeywords);
 
   try {
-    const verdict = await classifyWithModel({
+    const verdict = await classifier({
       apiKey,
       model: classifierModel,
       skillName: lesson.skillName,
