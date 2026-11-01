@@ -273,12 +273,12 @@ function hasSingleIntentQuestionShape(question) {
   if (/[؟?!。.!;\n\r]/u.test(withoutTrailingPunctuation)) return false;
 
   const normalized = normalize(withoutTrailingPunctuation);
-  const startsAsQuestion = /^(كيف|ما|ماذا|متى|لماذا|هل|اين|أين|كم|اي|اشرح|وضح|عرف|ما هو|ما هي|ما معنى)(?:\s|$)/u;
+  const startsAsQuestion = /^(كيف|ما|ماذا|متي|لماذا|هل|اين|أين|كم|اي|اشرح|وضح|عرف|ما هو|ما هي|ما معنى)(?:\s|$)/u;
   if (!startsAsQuestion.test(normalized)) return false;
 
   // A second interrogative clause is a mixed-intent signal even when the
   // user joins it with a conjunction instead of punctuation.
-  const hasSecondQuestion = /(?:^|\s)(?:وما|وماذا|وكيف|ومتى|ولماذا|وهل|واين|وأين|وكم|and what|and how|and when|and why|and who|and where|also what|also how)(?:\s|$)/u;
+  const hasSecondQuestion = /(?:^|\s)(?:وما|وماذا|وكيف|ومتي|ولماذا|وهل|واين|وأين|وكم|and what|and how|and when|and why|and who|and where|also what|also how)(?:\s|$)/u;
   if (hasSecondQuestion.test(normalized)) return false;
 
   // Command-like additions must not inherit the lesson phrase's direct pass.
