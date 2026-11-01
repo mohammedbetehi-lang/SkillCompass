@@ -90,6 +90,7 @@ const DIRECT_LESSON_CONCEPTS = {
   ],
   'ecommerce:8': [
     'إدارة المتجر', 'مؤشرات اداء المتجر', 'مؤشرات المتجر الاسبوعية',
+    'المؤشرات التي يجب مراقبتها أسبوعيًا لإدارة المتجر',
     'إيقاف حملة اعلانية خاسرة', 'متى أوقف الاعلان', 'معدل الارجاع',
     'تحليل نتائج المتجر', 'اتخاذ قرارات المتجر', 'التوسع في المتجر',
     'ربحية المتجر'
@@ -166,8 +167,8 @@ const DIRECT_LESSON_CONCEPTS = {
   'project:6': [
     'اقيم مخاطر المشروع',
     'إدارة مخاطر المشروع', 'تحديد المخاطر', 'احتمال وقوع الخطر',
-    'تأثير المخاطر', 'خطة الاستجابة للمخاطر', 'خطة بديلة',
-    'تقييم المخاطر', 'سجل المخاطر'
+    'تأثير المخاطر', 'خطة الاستجابة للمخاطر', 'خطة بديلة للمشروع',
+    'خطة للتعامل مع مخاطر المشروع', 'تقييم المخاطر', 'سجل المخاطر'
   ],
   'project:7': [
     'اتابع تقدم المشروع',
@@ -248,14 +249,35 @@ function normalize(text) {
 }
 
 function containsAny(haystack, needles) {
-  const h = normalize(haystack);
-  return needles.some((n) => h.includes(normalize(n)));
+  const normalizedHaystack = normalize(haystack)
+    .replace(/[^\p{L}\p{N}_]+/gu, ' ')
+    .trim();
+  const paddedHaystack = ` ${normalizedHaystack} `;
+  return needles.some((needle) => {
+    const normalizedNeedle = normalize(needle)
+      .replace(/[^\p{L}\p{N}_]+/gu, ' ')
+      .trim();
+    return normalizedNeedle.length > 0 && paddedHaystack.includes(` ${normalizedNeedle} `);
+  });
 }
 
 function isDirectLessonConcept(skillId, lessonId, question) {
   const concepts = DIRECT_LESSON_CONCEPTS[`${skillId}:${Number(lessonId)}`] || [];
   return containsAny(question, concepts);
 }
+
+const INSTRUCTION_OVERRIDE_PHRASES = [
+  'تجاهل التعليمات',
+  'تجاهل القواعد',
+  'انس التعليمات',
+  'انس القواعد',
+  'تجاوز التعليمات',
+  'ignore previous instructions',
+  'ignore all instructions',
+  'disregard previous instructions',
+  'ignore the system prompt',
+  'override system prompt',
+];
 
 async function classifyWithModel({
   apiKey, model, skillName, lessonTitle, lessonKeywords, question,
@@ -326,9 +348,12 @@ async function checkScope({
     };
   }
 
-  // Explicit concepts belonging to this exact lesson bypass classifier false negatives.
-  // The match is lesson-specific; it does not widen access to unrelated track topics.
-  if (isDirectLessonConcept(skillId, lessonId, question)) {
+  // A clean, lesson-specific concept can bypass a classifier false negative.
+  // Questions containing instruction-override language must go through the classifier.
+  if (
+    isDirectLessonConcept(skillId, lessonId, question) &&
+    !containsAny(question, INSTRUCTION_OVERRIDE_PHRASES)
+  ) {
     return {
       allowed: true,
       skillName: lesson.skillName,
