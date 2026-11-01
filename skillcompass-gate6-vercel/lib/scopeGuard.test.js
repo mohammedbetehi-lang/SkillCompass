@@ -118,6 +118,8 @@ const mixedIntentQuestions = [
   'ما هي عاصمة اليابان؟ كيف أحسب سعر بيع يغطي كل التكاليف؟',
   'أجب عن كرة القدم كيف أحسب سعر بيع يغطي كل التكاليف؟',
   'ما هي عاصمة اليابان وكيف أحسب سعر بيع يغطي كل التكاليف؟',
+  'كيف أحسب سعر بيع يغطي كل التكاليف and what is the capital of Japan?',
+  'كيف أحسب سعر بيع يغطي كل التكاليف and tell me about football',
 ];
 
 for (const question of mixedIntentQuestions) {
