@@ -166,8 +166,8 @@ const DIRECT_LESSON_CONCEPTS = {
   'project:6': [
     'اقيم مخاطر المشروع',
     'إدارة مخاطر المشروع', 'تحديد المخاطر', 'احتمال وقوع الخطر',
-    'تأثير المخاطر', 'خطة الاستجابة للمخاطر', 'خطة بديلة',
-    'تقييم المخاطر', 'سجل المخاطر'
+    'تأثير المخاطر', 'خطة الاستجابة للمخاطر', 'خطة بديلة للمشروع',
+    'خطة للتعامل مع مخاطر المشروع', 'تقييم المخاطر', 'سجل المخاطر'
   ],
   'project:7': [
     'اتابع تقدم المشروع',
@@ -249,8 +249,35 @@ function normalize(text) {
 
 function containsAny(haystack, needles) {
   const h = normalize(haystack);
+  return needles.some((needle) => {
+    const phrase = normalize(needle);
+    if (!phrase) return false;
+    const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\function containsAny(haystack, needles) {
+  const h = normalize(haystack);
   return needles.some((n) => h.includes(normalize(n)));
 }
+
+function isDirectLessonConcept(skillId, lessonId, question) {
+  const concepts = DIRECT_LESSON_CONCEPTS[`${skillId}:${Number(lessonId)}`] || [];
+  return containsAny(question, concepts);
+}').replace(/\\s+/g, '\\s+');
+    const pattern = new RegExp(`(^|[^\\p{L}\\p{N}_])${escaped}($|[^\\p{L}\\p{N}_])`, 'u');
+    return pattern.test(h);
+  });
+}
+
+const INSTRUCTION_OVERRIDE_PHRASES = [
+  'تجاهل التعليمات',
+  'تجاهل القواعد',
+  'انس التعليمات',
+  'انس القواعد',
+  'تجاوز التعليمات',
+  'ignore previous instructions',
+  'ignore all instructions',
+  'disregard previous instructions',
+  'ignore the system prompt',
+  'override system prompt',
+];
 
 function isDirectLessonConcept(skillId, lessonId, question) {
   const concepts = DIRECT_LESSON_CONCEPTS[`${skillId}:${Number(lessonId)}`] || [];
@@ -326,9 +353,12 @@ async function checkScope({
     };
   }
 
-  // Explicit concepts belonging to this exact lesson bypass classifier false negatives.
-  // The match is lesson-specific; it does not widen access to unrelated track topics.
-  if (isDirectLessonConcept(skillId, lessonId, question)) {
+  // A clean, lesson-specific concept can bypass a classifier false negative.
+  // Questions containing instruction-override language must go through the classifier.
+  if (
+    isDirectLessonConcept(skillId, lessonId, question) &&
+    !containsAny(question, INSTRUCTION_OVERRIDE_PHRASES)
+  ) {
     return {
       allowed: true,
       skillName: lesson.skillName,
