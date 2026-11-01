@@ -73,15 +73,29 @@ const CURRICULUM = {
  * Never trust a client-supplied title/content for scope decisions.
  */
 function resolveLesson(skillId, lessonId) {
+  // Accept only the four explicitly declared tracks; never resolve inherited keys.
+  if (typeof skillId !== 'string' || !Object.hasOwn(CURRICULUM, skillId)) {
+    return null;
+  }
+
+  // Lesson IDs must be canonical integers from 1 to 8 (number or numeric string).
+  if (
+    typeof lessonId !== 'number' && typeof lessonId !== 'string'
+  ) {
+    return null;
+  }
+  const lessonKey = String(lessonId);
+  if (!/^[1-8]$/.test(lessonKey)) return null;
+
   const skill = CURRICULUM[skillId];
-  if (!skill) return null;
-  const lesson = skill.lessons[lessonId];
-  if (!lesson) return null;
+  if (!Object.hasOwn(skill.lessons, lessonKey)) return null;
+  const lesson = skill.lessons[lessonKey];
+
   return {
     skillId,
     skillName: skill.name,
     skillKeywords: skill.keywords,
-    lessonId: Number(lessonId),
+    lessonId: Number(lessonKey),
     lessonTitle: lesson.title,
     lessonKeywords: lesson.keywords,
   };
