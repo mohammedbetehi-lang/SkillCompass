@@ -249,12 +249,12 @@ function normalize(text) {
 
 function containsAny(haystack, needles) {
   const normalizedHaystack = normalize(haystack)
-    .replace(/[^\\p{L}\\p{N}_]+/gu, ' ')
+    .replace(/[^؀-ۿa-z0-9_]+/gi, ' ')
     .trim();
   const paddedHaystack = ` ${normalizedHaystack} `;
   return needles.some((needle) => {
     const normalizedNeedle = normalize(needle)
-      .replace(/[^\\p{L}\\p{N}_]+/gu, ' ')
+      .replace(/[^؀-ۿa-z0-9_]+/gi, ' ')
       .trim();
     return normalizedNeedle.length > 0 && paddedHaystack.includes(` ${normalizedNeedle} `);
   });
