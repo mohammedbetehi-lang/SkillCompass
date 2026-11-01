@@ -261,23 +261,37 @@ function containsAny(haystack, needles) {
   });
 }
 
-function isDirectLessonConcept(skillId, lessonId, question) {
-  const concepts = DIRECT_LESSON_CONCEPTS[`${skillId}:${Number(lessonId)}`] || [];
-  return containsAny(question, concepts);
+function hasSingleIntentQuestionShape(question) {
+  const raw = String(question || '').trim();
+  if (!raw) return false;
+
+  // The direct path is intentionally conservative: one question, no
+  // sentence boundary, and a recognizable question/teaching opener.
+  // Anything more complex is delegated to the isolated classifier.
+  const withoutTrailingPunctuation = raw.replace(/[؟?!。.!]+$/u, '').trim();
+  if (!withoutTrailingPunctuation) return false;
+  if (/[؟?!。.!;\n\r]/u.test(withoutTrailingPunctuation)) return false;
+
+  const normalized = normalize(withoutTrailingPunctuation);
+  const startsAsQuestion = /^(كيف|ما|ماذا|متي|لماذا|هل|اين|أين|كم|اي|اشرح|وضح|عرف|ما هو|ما هي|ما معنى)(?:\s|$)/u;
+  if (!startsAsQuestion.test(normalized)) return false;
+
+  // A second interrogative clause is a mixed-intent signal even when the
+  // user joins it with a conjunction instead of punctuation.
+  const hasSecondQuestion = /(?:^|\s)(?:وما|وماذا|وكيف|ومتي|ولماذا|وهل|واين|وأين|وكم|and what|and how|and when|and why|and who|and where|also what|also how)(?:\s|$)/u;
+  if (hasSecondQuestion.test(normalized)) return false;
+
+  // Command-like additions must not inherit the lesson phrase's direct pass.
+  const hasDirectiveAddition = /(?:^|\s)(?:تجاهل|انس|تجاوز|اجب عن|أجب عن|اذكر|جاوب|تحدث عن|تكلم عن|ignore|disregard|override|answer about|tell me about|talk about|switch to|change topic to)(?:\s|$)/iu;
+  if (hasDirectiveAddition.test(normalized)) return false;
+
+  return true;
 }
 
-const INSTRUCTION_OVERRIDE_PHRASES = [
-  'تجاهل التعليمات',
-  'تجاهل القواعد',
-  'انس التعليمات',
-  'انس القواعد',
-  'تجاوز التعليمات',
-  'ignore previous instructions',
-  'ignore all instructions',
-  'disregard previous instructions',
-  'ignore the system prompt',
-  'override system prompt',
-];
+function isDirectLessonConcept(skillId, lessonId, question) {
+  const concepts = DIRECT_LESSON_CONCEPTS[`${skillId}:${Number(lessonId)}`] || [];
+  return hasSingleIntentQuestionShape(question) && containsAny(question, concepts);
+}
 
 async function classifyWithModel({
   apiKey, model, skillName, lessonTitle, lessonKeywords, question,
@@ -348,12 +362,9 @@ async function checkScope({
     };
   }
 
-  // A clean, lesson-specific concept can bypass a classifier false negative.
-  // Questions containing instruction-override language must go through the classifier.
-  if (
-    isDirectLessonConcept(skillId, lessonId, question) &&
-    !containsAny(question, INSTRUCTION_OVERRIDE_PHRASES)
-  ) {
+  // Only a single, clearly framed lesson question may use the fast path.
+  // Compound, mixed-topic, or directive-led input goes to the classifier.
+  if (isDirectLessonConcept(skillId, lessonId, question)) {
     return {
       allowed: true,
       skillName: lesson.skillName,
