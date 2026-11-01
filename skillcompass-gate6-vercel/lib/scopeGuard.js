@@ -248,22 +248,21 @@ function normalize(text) {
 }
 
 function containsAny(haystack, needles) {
-  const h = normalize(haystack);
+  const normalizedHaystack = normalize(haystack)
+    .replace(/[^\\p{L}\\p{N}_]+/gu, ' ')
+    .trim();
+  const paddedHaystack = ` ${normalizedHaystack} `;
   return needles.some((needle) => {
-    const phrase = normalize(needle);
-    if (!phrase) return false;
-    const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\function containsAny(haystack, needles) {
-  const h = normalize(haystack);
-  return needles.some((n) => h.includes(normalize(n)));
+    const normalizedNeedle = normalize(needle)
+      .replace(/[^\\p{L}\\p{N}_]+/gu, ' ')
+      .trim();
+    return normalizedNeedle.length > 0 && paddedHaystack.includes(` ${normalizedNeedle} `);
+  });
 }
 
 function isDirectLessonConcept(skillId, lessonId, question) {
   const concepts = DIRECT_LESSON_CONCEPTS[`${skillId}:${Number(lessonId)}`] || [];
   return containsAny(question, concepts);
-}').replace(/\\s+/g, '\\s+');
-    const pattern = new RegExp(`(^|[^\\p{L}\\p{N}_])${escaped}($|[^\\p{L}\\p{N}_])`, 'u');
-    return pattern.test(h);
-  });
 }
 
 const INSTRUCTION_OVERRIDE_PHRASES = [
