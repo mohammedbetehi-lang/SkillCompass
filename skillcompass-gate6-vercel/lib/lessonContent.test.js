@@ -37,7 +37,7 @@ test('built context contains the selected lesson title, goal, and content', () =
   const context = buildLessonContext('finance', 6);
   assert.match(context, /الأهداف المالية/);
   assert.match(context, /هدف\/وصف الدرس/);
-  assert.match(context, /محتوى الدرس/);
+  assert.match(context, /المحتوى التعليمي المعتمد/);
   assert.match(context, /SMART|ذكي/);
 });
 
