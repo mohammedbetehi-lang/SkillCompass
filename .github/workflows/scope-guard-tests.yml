@@ -21,4 +21,4 @@ jobs:
 
       - name: Run local tests
         working-directory: skillcompass-gate6-vercel
-        run: node --test lib/scopeGuard.test.js
+        run: node --test lib/scopeGuard.test.js lib/lessonContent.test.js
