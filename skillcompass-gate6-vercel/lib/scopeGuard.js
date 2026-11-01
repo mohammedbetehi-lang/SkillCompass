@@ -278,11 +278,6 @@ const INSTRUCTION_OVERRIDE_PHRASES = [
   'override system prompt',
 ];
 
-function isDirectLessonConcept(skillId, lessonId, question) {
-  const concepts = DIRECT_LESSON_CONCEPTS[`${skillId}:${Number(lessonId)}`] || [];
-  return containsAny(question, concepts);
-}
-
 async function classifyWithModel({
   apiKey, model, skillName, lessonTitle, lessonKeywords, question,
   simulationMode = false, skillSimulationKeywords = [], lessonContent = '',
