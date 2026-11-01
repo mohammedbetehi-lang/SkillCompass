@@ -270,19 +270,19 @@ function hasSingleIntentQuestionShape(question) {
   // Anything more complex is delegated to the isolated classifier.
   const withoutTrailingPunctuation = raw.replace(/[؟?!。.!]+$/u, '').trim();
   if (!withoutTrailingPunctuation) return false;
-  if (/[؟?!。.!;\\n\\r]/u.test(withoutTrailingPunctuation)) return false;
+  if (/[؟?!。.!;\n\r]/u.test(withoutTrailingPunctuation)) return false;
 
   const normalized = normalize(withoutTrailingPunctuation);
-  const startsAsQuestion = /^(كيف|ما|ماذا|متى|لماذا|هل|اين|أين|كم|اي|اشرح|وضح|عرف|ما هو|ما هي|ما معنى)(?:\\s|$)/u;
+  const startsAsQuestion = /^(كيف|ما|ماذا|متى|لماذا|هل|اين|أين|كم|اي|اشرح|وضح|عرف|ما هو|ما هي|ما معنى)(?:\s|$)/u;
   if (!startsAsQuestion.test(normalized)) return false;
 
   // A second interrogative clause is a mixed-intent signal even when the
   // user joins it with a conjunction instead of punctuation.
-  const hasSecondQuestion = /(?:^|\\s)(?:وما|وماذا|وكيف|ومتى|ولماذا|وهل|واين|وأين|وكم)(?:\\s|$)/u;
+  const hasSecondQuestion = /(?:^|\s)(?:وما|وماذا|وكيف|ومتى|ولماذا|وهل|واين|وأين|وكم)(?:\s|$)/u;
   if (hasSecondQuestion.test(normalized)) return false;
 
   // Command-like additions must not inherit the lesson phrase's direct pass.
-  const hasDirectiveAddition = /(?:^|\\s)(?:تجاهل|انس|تجاوز|اجب عن|أجب عن|اذكر|جاوب|تحدث عن|ignore|disregard|override|answer about)(?:\\s|$)/iu;
+  const hasDirectiveAddition = /(?:^|\s)(?:تجاهل|انس|تجاوز|اجب عن|أجب عن|اذكر|جاوب|تحدث عن|ignore|disregard|override|answer about)(?:\s|$)/iu;
   if (hasDirectiveAddition.test(normalized)) return false;
 
   return true;
