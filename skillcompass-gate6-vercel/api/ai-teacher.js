@@ -233,6 +233,8 @@ function sanitizeSimContext(simContext, bodySkillId) {
 
 // حدود القراءة والتنظيف لتشخيص أخطاء المزوّد (انظر وثائق OpenRouter: error.code / error.metadata)
 const PROVIDER_BODY_MAX_BYTES = 16 * 1024;
+const RETRY_AFTER_MAX_RAW_LENGTH = 64;
+const RETRY_AFTER_MAX_SECONDS = 7 * 24 * 3600;
 
 /** safeToken — نص أو رقم يُنظَّف إلى رموز آمنة قصيرة، أو undefined. */
 function safeToken(v, max = 40) {
@@ -242,9 +244,35 @@ function safeToken(v, max = 40) {
   return clean || undefined;
 }
 
-/** safeHttpCode — رمز HTTP صالح فقط (100–599). */
+/**
+ * safeHttpCode — error.code الرقمي (وثائق OpenRouter: يطابق HTTP status لأخطاء الطلب).
+ * يُسجَّل كحقل منفصل عن HTTP status الفعلي للرد.
+ */
 function safeHttpCode(v) {
   return Number.isInteger(v) && v >= 100 && v <= 599 ? v : undefined;
+}
+
+/**
+ * parseRetryAfter — يقبل عدد الثواني (أرقام فقط) أو تاريخ HTTP بصيغة IMF-fixdate.
+ * يعيد عدد الثواني كرقم صحيح، أو undefined للقيم غير الصحيحة أو الطويلة.
+ * لا يُسجَّل النص الخام أبداً.
+ */
+function parseRetryAfter(raw, nowMs = Date.now()) {
+  if (typeof raw !== 'string') return undefined;
+  const s = raw.trim();
+  if (!s || s.length > RETRY_AFTER_MAX_RAW_LENGTH) return undefined;
+  if (/^\d{1,7}$/.test(s)) {
+    const n = Number(s);
+    return n <= RETRY_AFTER_MAX_SECONDS ? n : undefined;
+  }
+  if (/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(s)) {
+    const t = Date.parse(s);
+    if (Number.isNaN(t)) return undefined;
+    const secs = Math.round((t - nowMs) / 1000);
+    if (secs > RETRY_AFTER_MAX_SECONDS) return undefined;
+    return Math.max(secs, 0);
+  }
+  return undefined;
 }
 
 async function cancelQuietly(reader) {
@@ -254,6 +282,7 @@ async function cancelQuietly(reader) {
 /**
  * readBodyCapped — يقرأ جسم الرد من الـStream فقط، بحد أقصى maxBytes بايت.
  * لا يستخدم text() لأنه يقرأ الجسم كاملاً قبل أي تحقق من الحجم.
+ * قراءة الـStream مرتبطة بـsignal الطلب، فتنقطع عند انتهاء المهلة.
  * عند غياب Stream، أو تجاوز الحد، أو chunk غير صالح، يلغي القراءة ويعيد null.
  */
 async function readBodyCapped(resp, maxBytes) {
@@ -291,7 +320,7 @@ function parseProviderError(text) {
 
 /**
  * providerDiagnostics — الحقول الموثقة فقط من جسم الخطأ.
- * لا تُستخرج message ولا raw ولا flagged_input ولا أي حقل آخر.
+ * error.code الرقمي يُفصل عن error.code النصي. لا تُستخرج message ولا raw ولا flagged_input.
  */
 function providerDiagnostics(errObj) {
   if (!errObj) return {};
@@ -300,6 +329,8 @@ function providerDiagnostics(errObj) {
     : {};
   return {
     error_code: safeHttpCode(errObj.code),
+    // الرمز النصي لا تُسجَّل قيمته: الوثائق تعرّف error.code كرقم، فلا يُضمن أن النص آمن.
+    error_code_kind: typeof errObj.code === 'string' ? 'text' : undefined,
     error_type: safeToken(md.error_type),
     provider_code: safeToken(md.provider_code),
     provider_name: safeToken(md.provider_name),
@@ -307,78 +338,87 @@ function providerDiagnostics(errObj) {
   };
 }
 
-// قيم limit_source المعروفة (انظر صفحة الأخطاء). openrouter_credits وارد بحسب طلب المراجعة، وغير مؤكد في الصفحة التي قُرئت.
-const LIMIT_SOURCE_CATEGORY_402 = {
+// تصنيف limit_source مستقل عن HTTP status: وثائق OpenRouter لا تحدد لكل قيمة الرمز الذي تُعاد به.
+const LIMIT_SOURCE_CATEGORY = {
   openrouter_in_flight_budget: 'in_flight_budget',
-  openrouter_credits: 'insufficient_credits',
+  openrouter_credits: 'credits',
   openrouter_key_limit: 'key_limit',
   openrouter_guardrail_budget: 'guardrail_budget',
   openrouter_workspace_budget: 'workspace_budget',
 };
-const LIMIT_SOURCE_CATEGORY_403 = {
-  openrouter_guardrail_budget: 'guardrail_budget',
-  openrouter_workspace_budget: 'workspace_budget',
-  openrouter_key_limit: 'key_limit',
+
+// error_type الموثقة فقط في صفحة الأخطاء. أي قيمة أخرى لا تُصنَّف، وتُسجَّل كما هي (بعد التنظيف).
+const DOCUMENTED_ERROR_TYPE_CATEGORY = {
+  authentication: 'auth_invalid',
+  payment_required: 'payment_required',
+  permission_denied: 'permission_denied',
+  provider_overloaded: 'provider_capacity',
+  provider_unavailable: 'provider_capacity',
+  timeout: 'timeout',
 };
 
 /**
- * classifyProviderError — تصنيف داخلي للسجلات فقط، لا يُعرض للطالب.
- * يعتمد أولاً على limit_source وerror_type، ثم على HTTP status عند غيابهما.
- * لا يُستنتج مصدر 429 إلا من دليل موثق:
- *   - platform_rate_limit: وجود ترويسات X-RateLimit-* (موثقة للحدود التي تفرضها المنصة نفسها).
- *   - provider_rate_limit: وجود metadata.provider_code (الإشارة الموثقة لخطأ من المزوّد) دون ترويسات المنصة.
+ * rateLimitCategory — مصدر 429 لا يُستنتج إلا من دليل:
+ *   - platform_rate_limit: الترويسات الثلاث X-RateLimit-Limit وRemaining وReset معاً (ترويسة واحدة لا تكفي).
+ *   - provider_rate_limit: metadata.provider_code مع error_type = rate_limit_exceeded (إشارتان معاً، وprovider_code وحده لا يكفي).
  *   - unknown_rate_limit: لا دليل كافٍ.
+ * بيانات الترويسات نفسها تُسجَّل كحقول مستقلة، ولا تُعد مصدراً للخطأ.
+ */
+function rateLimitCategory(diag) {
+  if (diag.ratelimit_limit && diag.ratelimit_remaining && diag.ratelimit_reset) return 'platform_rate_limit';
+  if (diag.provider_code && diag.error_type === 'rate_limit_exceeded') return 'provider_rate_limit';
+  return 'unknown_rate_limit';
+}
+
+/**
+ * classifyProviderError — تصنيف داخلي للسجلات فقط، لا يُعرض للطالب. الترتيب:
+ *   1) limit_source (القيم المعروفة، وغيرها unknown_limit_source) — مستقل عن HTTP status.
+ *   2) 429 — مصدر الـRate Limit حسب الأدلة أعلاه.
+ *   3) error_type الموثق.
+ *   4) HTTP status كملاذ أخير.
  */
 function classifyProviderError(status, diag) {
-  const ls = diag.limit_source;
-  const et = diag.error_type || '';
-
-  if (status === 429) {
-    if (diag.platform_rate_limit_headers) return 'platform_rate_limit';
-    if (diag.provider_code) return 'provider_rate_limit';
-    return 'unknown_rate_limit';
-  }
+  if (diag.limit_source) return LIMIT_SOURCE_CATEGORY[diag.limit_source] || 'unknown_limit_source';
+  if (status === 429) return rateLimitCategory(diag);
+  if (diag.error_type && DOCUMENTED_ERROR_TYPE_CATEGORY[diag.error_type]) return DOCUMENTED_ERROR_TYPE_CATEGORY[diag.error_type];
   if (status === 401) return 'auth_invalid';
-  if (status === 402) {
-    if (!ls) return 'insufficient_credits';
-    return LIMIT_SOURCE_CATEGORY_402[ls] || 'unknown_limit';
-  }
-  if (status === 403) {
-    if (ls && LIMIT_SOURCE_CATEGORY_403[ls]) return LIMIT_SOURCE_CATEGORY_403[ls];
-    if (et === 'content_policy_violation' || et === 'refusal') return 'content_policy';
-    if (et === 'permission_denied') return 'permission_denied';
-    return 'forbidden_other';
-  }
-  if (status === 408 || et === 'timeout') return 'timeout';
+  if (status === 402) return 'insufficient_credits';
+  if (status === 403) return 'forbidden_other';
+  if (status === 408) return 'timeout';
   if (status === 502 || status === 503) return 'provider_capacity';
   return 'other';
 }
 
 /**
- * readProviderErrorDiagnostics — Retry-After وترويسات X-RateLimit-* (الموثقة)،
+ * readProviderErrorDiagnostics — Retry-After (ثواني أو HTTP-date)، وترويسات X-RateLimit-* كبيانات،
  * ثم الحقول الموثقة من جسم الخطأ المحدود. لا تعيد أي محاولة، ولا تُرمي استثناءات.
  */
 async function readProviderErrorDiagnostics(resp) {
-  const header = (name, max) => {
+  const rawHeader = (name) => {
     try {
-      const v = resp && resp.headers && typeof resp.headers.get === 'function' ? resp.headers.get(name) : null;
-      return safeToken(v, max);
-    } catch { return undefined; }
+      return resp && resp.headers && typeof resp.headers.get === 'function' ? resp.headers.get(name) : null;
+    } catch { return null; }
   };
-  const rlLimit = header('x-ratelimit-limit', 20);
-  const rlRemaining = header('x-ratelimit-remaining', 20);
-  const rlReset = header('x-ratelimit-reset', 20);
+  const rlLimit = safeToken(rawHeader('x-ratelimit-limit'), 20);
+  const rlRemaining = safeToken(rawHeader('x-ratelimit-remaining'), 20);
+  const rlReset = safeToken(rawHeader('x-ratelimit-reset'), 20);
+  const retryAfterSeconds = parseRetryAfter(rawHeader('retry-after'));
 
   const text = await readBodyCapped(resp, PROVIDER_BODY_MAX_BYTES);
-  const diag = providerDiagnostics(parseProviderError(text));
-  diag.platform_rate_limit_headers = Boolean(rlLimit || rlRemaining || rlReset);
+  const diag = {
+    ...providerDiagnostics(parseProviderError(text)),
+    ratelimit_limit: rlLimit,
+    ratelimit_remaining: rlRemaining,
+    ratelimit_reset: rlReset,
+  };
 
   return {
-    retry_after: header('retry-after', 20),
+    retry_after_seconds: retryAfterSeconds,
     ratelimit_limit: rlLimit,
     ratelimit_remaining: rlRemaining,
     ratelimit_reset: rlReset,
     error_code: diag.error_code,
+    error_code_kind: diag.error_code_kind,
     error_type: diag.error_type,
     provider_code: diag.provider_code,
     provider_name: diag.provider_name,
@@ -643,6 +683,11 @@ module.exports = async (req, res) => {
         http_status: resp.status,
         ...providerDiag,
       }));
+      // إذا انتهت المهلة أثناء قراءة جسم الخطأ، فالنتيجة مهلة لا خطأ مزوّد.
+      if (tutorController.signal.aborted) {
+        res.status(504).json({ error: 'ai_timeout' });
+        return;
+      }
       res.status(502).json({ error: 'ai_unavailable' });
       return;
     }
