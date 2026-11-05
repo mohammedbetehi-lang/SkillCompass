@@ -36,6 +36,9 @@ function providerLog() {
 }
 const enc = new TextEncoder();
 // يرصد استدعاءات reader.read() و reader.cancel() التي ينفّذها الكود المختبَر على Stream حقيقي.
+// العدادات تزيد فقط داخل الغلاف (wrapper) الذي يضعه على القارئ الذي يعيده getReader():
+// لا يستطيع الـmock للـStream (start/pull/cancel) الوصول إليها. الغلاف يستدعي الدالة الأصلية
+// ويعيد نتيجتها كما هي، فلا يغيّر السلوك؛ وهو يُثبت صحته بأن الطفرات تُكشف به.
 function spyOnReads(stream) {
   const counts = { reads: 0, cancels: 0 };
   const getReader = stream.getReader.bind(stream);
@@ -87,8 +90,15 @@ test('real stream: body one byte over the cap is not parsed and the code cancels
   const counts = spyOnReads(stream);
   global.fetch = async () => new Response(stream, { status: 429 });
   // حارس: إن لم يتوقف الكود عن القراءة يفشل الاختبار بوضوح بدل أن يعلّق.
-  const guard = new Promise((_, rej) => realSetTimeout(() => rej(new Error('reader was never stopped')), 2000));
-  const r = await Promise.race([run(), guard]); assert.equal(r.body.error, 'ai_unavailable');
+  let guardTimer;
+  const guard = new Promise((_, rej) => { guardTimer = realSetTimeout(() => rej(new Error('reader was never stopped')), 2000); });
+  let r;
+  try {
+    r = await Promise.race([run(), guard]);
+  } finally {
+    clearTimeout(guardTimer); // يلغي مؤقت الحارس فور انتهاء race بنجاح أو فشل
+  }
+  assert.equal(r.body.error, 'ai_unavailable');
   assert.equal(cancelled, true, 'the code under test must cancel the real stream');
   assert.equal(counts.reads, 2, 'reading must stop right after the chunk that exceeds the cap');
   assert.equal(providerLog().error_type, undefined);
@@ -149,7 +159,9 @@ test('real stream: abort via timeout errors the body, the code cancels its reade
   const r = await run();
   assert.equal(r.statusCode, 504); assert.equal(r.body.error, 'ai_timeout');
   assert.ok(Date.now() - started < 5000, 'must not hang');
-  assert.equal(counts.cancels, 1, 'readBodyCapped must cancel its reader after the abort');
+  // يثبت أن الكود المختبَر استدعى reader.cancel() بعد خطأ القراءة الناتج عن Abort.
+  // لا يثبت أن إلغاء الـStream نجح: الـStream كان في حالة خطأ، وإلغاؤه لا أثر له في هذه الحالة.
+  assert.equal(counts.cancels, 1, 'readBodyCapped must call reader.cancel() after the abort-induced read error');
 });
 
 test('real stream: abort while headers are pending, body is created already aborted, yields ai_timeout', async () => {
