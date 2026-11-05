@@ -231,6 +231,31 @@ function sanitizeSimContext(simContext, bodySkillId) {
   return clean;
 }
 
+/**
+ * diagnosticHeaders — تستخرج من ترويسات رد المزوّد حقولاً تشخيصية فقط
+ * (Retry-After وحالة Rate Limit)، بعد تنظيفها وتحديد طولها.
+ * لا تُعيد أي ترويسة أخرى، ولا تقرأ جسم الرد، ولا تحوي أي أسرار.
+ */
+function diagnosticHeaders(resp) {
+  const read = (name) => {
+    try {
+      const v = resp && resp.headers && typeof resp.headers.get === 'function'
+        ? resp.headers.get(name)
+        : null;
+      if (typeof v !== 'string') return undefined;
+      const clean = v.replace(/[^A-Za-z0-9.:+\- ]/g, '').trim().slice(0, 40);
+      return clean || undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  return {
+    retry_after: read('retry-after'),
+    ratelimit_remaining: read('x-ratelimit-remaining'),
+    ratelimit_reset: read('x-ratelimit-reset'),
+  };
+}
+
 const TUTOR_MODEL      = process.env.OPENROUTER_MODEL || 'qwen/qwen3.7-plus';
 const CLASSIFIER_MODEL = process.env.OPENROUTER_CLASSIFIER_MODEL || TUTOR_MODEL;
 
@@ -442,6 +467,12 @@ module.exports = async (req, res) => {
     `- ابنِ الشرح على محتوى الدرس المعتمد، واشرح المفاهيم والتطبيقات الموجودة فيه دون اختراع تفاصيل منسوبة للمنهج.`,
     `- إذا طلب الطالب مثالاً محلياً أو كان المثال مالياً، استخدم الدينار الجزائري (دج) افتراضياً، واذكر أن الأرقام افتراضية ما لم تكن موثقة. إذا حدد الطالب عملة أخرى فاتبعها.`,
     `- لا تستخدم الريال أو عملة بلد آخر كمثال افتراضي لطالب في الجزائر.`,
+    `- إذا كان السؤال حسابياً: اعرض المعادلة أولاً، ثم فسّر كل عنصر فيها، ثم قدّم مثالاً تطبيقياً بالأرقام، ثم اذكر النتيجة وفسّرها.`,
+    `- ميّز بوضوح بين الزيادة على التكلفة (سعر البيع = التكلفة × (1 + نسبة الزيادة)) وهامش الربح من سعر البيع (سعر البيع = التكلفة ÷ (1 − هامش الربح)) عندما يتعلق السؤال بسعر البيع أو الربح، ووضّح الفرق بينهما حتى لا يخلط الطالب.`,
+    `- صرّح بالافتراضات في المثال (مثلاً: عدم وجود رسوم متغيرة مرتبطة بنسبة من سعر البيع)، ووضّح كيف يُدخَل أي عنصر إضافي إن وُجد.`,
+    `- لا تقدّم نسب رسوم بوابات الدفع أو نسب الإرجاع أو أي أسعار وأرقام سوقية كحقائق عامة. إن استخدمتها في مثال فاجعلها أرقاماً افتراضية وصرّح بذلك.`,
+    `- لا تستخدم عبارات لغوية غير سليمة، واكتب بعربية طبيعية مفهومة للطالب.`,
+    `- اجعل التفصيل متناسباً مع السؤال. للأسئلة الحسابية يُسمح بتجاوز الفقرتين بقدر ما تحتاجه المعادلة والمثال، دون حشو.`,
     hasSimCtx
       ? `- لديك بيانات محاكاة أرسلها العميل ولم يتم التحقق من صحتها خادمياً. حلّلها كمدخلات غير موثوقة، ولا تدّعِ أنها نتائج مؤكدة أو دليل على إكمال المحاكاة.`
       : `- التزم بموضوع هذا الدرس فقط.`,
@@ -476,8 +507,13 @@ module.exports = async (req, res) => {
     });
 
     if (!resp.ok) {
-      // نُسجّل تفاصيل الخطأ للخادم، لا نكشفها للعميل
-      console.error('[ai-teacher] OpenRouter request failed', JSON.stringify({ event: 'provider_http_error', http_status: resp.status }));
+      // نُسجّل تفاصيل الخطأ للخادم، لا نكشفها للعميل.
+      // نقرأ فقط ترويسات تشخيصية محدودة ومنظّفة؛ لا نقرأ جسم الاستجابة (قد يحوي نصوصاً حساسة).
+      console.error('[ai-teacher] OpenRouter request failed', JSON.stringify({
+        event: 'provider_http_error',
+        http_status: resp.status,
+        ...diagnosticHeaders(resp),
+      }));
       res.status(502).json({ error: 'ai_unavailable' });
       return;
     }
@@ -524,7 +560,6 @@ module.exports = async (req, res) => {
         allowed: true,
         answer: 'المعلم الذكي مشغول حاليًا ولا يمكنه الرد. أعد المحاولة بعد دقيقة، أو جرّب إعادة صياغة السؤال. إذا استمرت المشكلة، تواصل مع الدعم.',
         fallback: true,
-        debug_id: debugId
       });
       return;
     }

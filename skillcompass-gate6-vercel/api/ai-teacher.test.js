@@ -121,3 +121,27 @@ for (const [status, error, pattern] of [[504,'ai_timeout',/انتهت مهلة/]
     assert.match(display.textContent,pattern); assert.deepEqual(progress.completedLessons,[]);
   });
 }
+
+test('empty provider answer returns the safe fallback instead of throwing', async () => {
+  global.fetch=async (_url,opts)=>{calls.push(opts); return reply({choices:[{finish_reason:'stop',message:{content:''}}]});};
+  const r=await run(direct); assert.equal(r.statusCode,200); assert.equal(r.body.allowed,true); assert.equal(r.body.fallback,true);
+  assert.equal(r.body.debug_id,undefined); assert.match(r.body.answer,/مشغول/);
+});
+test('HTTP 429 logs only sanitized rate-limit headers, capped in length, and never the body', async () => {
+  const realError=console.error, logged=[]; console.error=(...args)=>logged.push(args.join(' '));
+  const headers=new Map([['retry-after','30'],['x-ratelimit-remaining','0<script>'+'9'.repeat(80)],['x-ratelimit-reset','1700000000']]);
+  global.fetch=async (_url,opts)=>{calls.push(opts); return {ok:false,status:429,headers,text:async()=>'SECRET BODY '+direct};};
+  try {
+    const r=await run(direct); assert.equal(r.statusCode,502); assert.equal(r.body.error,'ai_unavailable');
+    const entry=JSON.parse(logged[0].slice(logged[0].indexOf('{')));
+    assert.equal(entry.event,'provider_http_error'); assert.equal(entry.http_status,429); assert.equal(entry.retry_after,'30');
+    assert.equal(entry.ratelimit_reset,'1700000000'); assert.ok(entry.ratelimit_remaining.length<=40);
+    assert.doesNotMatch(logged[0],/SECRET|<script>|offline-test-only/); assert.equal(logged[0].includes(direct),false);
+  } finally {console.error=realError;}
+});
+test('tutor system prompt carries the pedagogy rules without changing generation limits', async () => {
+  delete process.env.AI_TEACHER_DISABLE_REASONING; await run(direct); const body=JSON.parse(calls[0].body); const sys=body.messages[0].content;
+  assert.match(sys,/سعر البيع = التكلفة × \(1 \+ نسبة الزيادة\)/); assert.match(sys,/سعر البيع = التكلفة ÷ \(1 − هامش الربح\)/);
+  assert.match(sys,/الدينار الجزائري/); assert.match(sys,/لا تقدّم نسب رسوم بوابات الدفع/);
+  assert.equal(body.max_tokens,8192); assert.deepEqual(body.reasoning,{effort:'low'});
+});
