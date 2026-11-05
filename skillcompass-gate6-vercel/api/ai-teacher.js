@@ -382,7 +382,8 @@ function classifyProviderError(status, diag) {
   if (status === 429) return rateLimitCategory(diag);
   if (diag.error_type && DOCUMENTED_ERROR_TYPE_CATEGORY[diag.error_type]) return DOCUMENTED_ERROR_TYPE_CATEGORY[diag.error_type];
   if (status === 401) return 'auth_invalid';
-  if (status === 402) return 'insufficient_credits';
+  // 402 بلا limit_source ولا error_type موثق: لا دليل على نوع الدفع، فلا يُفترض insufficient_credits.
+  if (status === 402) return 'unknown_payment_error';
   if (status === 403) return 'forbidden_other';
   if (status === 408) return 'timeout';
   if (status === 502 || status === 503) return 'provider_capacity';

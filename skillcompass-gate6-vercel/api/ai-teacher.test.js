@@ -211,10 +211,28 @@ test('openrouter_key_limit with 403 is key_limit, not auth', async () => {
     await run(direct); const e=parsedLog(logged); assert.equal(e.category,'key_limit'); assert.notEqual(e.category,'auth_invalid');
   });
 });
-test('402 without limit_source is insufficient_credits by status', async () => {
+test('402 without limit_source or documented error_type is unknown_payment_error', async () => {
   await withLog(async (logged) => {
     global.fetch=async (_u,opts)=>{calls.push(opts); return {ok:false,status:402,body:errBody({error:{code:402}})};};
-    await run(direct); assert.equal(parsedLog(logged).category,'insufficient_credits');
+    await run(direct); assert.equal(parsedLog(logged).category,'unknown_payment_error');
+  });
+});
+test('402 with documented error_type payment_required is payment_required', async () => {
+  await withLog(async (logged) => {
+    global.fetch=async (_u,opts)=>{calls.push(opts); return {ok:false,status:402,body:errBody({error:{code:402,metadata:{error_type:'payment_required'}}})};};
+    await run(direct); const e=parsedLog(logged); assert.equal(e.category,'payment_required'); assert.equal(e.http_status,402);
+  });
+});
+test('402 with a known limit_source keeps limit_source priority over error_type', async () => {
+  await withLog(async (logged) => {
+    global.fetch=async (_u,opts)=>{calls.push(opts); return {ok:false,status:402,body:errBody({error:{code:402,metadata:{error_type:'payment_required',limit_source:'openrouter_key_limit'}}})};};
+    await run(direct); assert.equal(parsedLog(logged).category,'key_limit');
+  });
+});
+test('402 with unrecognized limit_source is unknown_limit_source, not a payment guess', async () => {
+  await withLog(async (logged) => {
+    global.fetch=async (_u,opts)=>{calls.push(opts); return {ok:false,status:402,body:errBody({error:{code:402,metadata:{limit_source:'openrouter_mystery'}}})};};
+    await run(direct); assert.equal(parsedLog(logged).category,'unknown_limit_source');
   });
 });
 test('403 without limit_source or documented error_type is forbidden_other', async () => {
@@ -318,13 +336,18 @@ test('non-byte chunk is rejected without parsing', async () => {
   });
 });
 test('timeout while reading the error body yields ai_timeout, not ai_unavailable', async () => {
-  await withLog(async (logged) => {
-    global.setTimeout=(fn,ms,...args)=>realSetTimeout(fn,1,...args);
-    global.fetch=async (_u,opts)=>{calls.push(opts); const sig=opts.signal;
-      const body={getReader(){return {read:()=>new Promise((_,rej)=>{ if(sig.aborted) rej(new Error('aborted')); else sig.addEventListener('abort',()=>rej(new Error('aborted')),{once:true}); }), cancel:async()=>{}};}};
-      return {ok:false,status:429,body};};
-    const r=await run(direct); assert.equal(r.statusCode,504); assert.equal(r.body.error,'ai_timeout'); assert.equal(calls.length,1);
-  });
+  const originalSetTimeout = global.setTimeout;
+  try {
+    await withLog(async (logged) => {
+      global.setTimeout=(fn,ms,...args)=>realSetTimeout(fn,1,...args);
+      global.fetch=async (_u,opts)=>{calls.push(opts); const sig=opts.signal;
+        const body={getReader(){return {read:()=>new Promise((_,rej)=>{ if(sig.aborted) rej(new Error('aborted')); else sig.addEventListener('abort',()=>rej(new Error('aborted')),{once:true}); }), cancel:async()=>{}};}};
+        return {ok:false,status:429,body};};
+      const r=await run(direct); assert.equal(r.statusCode,504); assert.equal(r.body.error,'ai_timeout'); assert.equal(calls.length,1);
+    });
+  } finally {
+    global.setTimeout = originalSetTimeout;
+  }
 });
 test('hostile metadata values are sanitized before logging', async () => {
   await withLog(async (logged) => {
