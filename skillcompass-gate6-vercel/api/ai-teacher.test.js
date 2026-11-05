@@ -94,16 +94,6 @@ test('HTTP 200 provider error without choices is classified safely', async () =>
     assert.doesNotMatch(logged[0],/PRIVATE|SECRET|sensitive/);
   } finally { console.error=realError; }
 });
-test('non-success provider HTTP logs only safe metadata, never the response body or question', async () => {
-  const realError=console.error, logged=[]; console.error=(...args)=>logged.push(args.join(' '));
-  let bodyRead=false;
-  global.fetch=async (_url,opts)=>{calls.push(opts); return {ok:false,status:429,text:async()=>{bodyRead=true;return 'RAW_RESPONSE_SECRET '+direct;}};};
-  try {
-    const r=await run(direct); assert.equal(r.statusCode,502); assert.equal(r.body.error,'ai_unavailable');
-    assert.equal(bodyRead,false); assert.equal(logged.length,1); assert.match(logged[0],/provider_http_error/); assert.match(logged[0],/429/);
-    assert.doesNotMatch(logged[0],/RAW_RESPONSE_SECRET|offline-test-only/); assert.equal(logged[0].includes(direct),false);
-  } finally {console.error=realError;}
-});
 test('unexpected provider exception is not logged verbatim', async () => {
   const realError=console.error, logged=[]; console.error=(...args)=>logged.push(args.join(' '));
   global.fetch=async ()=>{throw new Error('RAW_SECRET '+direct+' offline-test-only');};
@@ -127,21 +117,71 @@ test('empty provider answer returns the safe fallback instead of throwing', asyn
   const r=await run(direct); assert.equal(r.statusCode,200); assert.equal(r.body.allowed,true); assert.equal(r.body.fallback,true);
   assert.equal(r.body.debug_id,undefined); assert.match(r.body.answer,/مشغول/);
 });
-test('HTTP 429 logs only sanitized rate-limit headers, capped in length, and never the body', async () => {
-  const realError=console.error, logged=[]; console.error=(...args)=>logged.push(args.join(' '));
-  const headers=new Map([['retry-after','30'],['x-ratelimit-remaining','0<script>'+'9'.repeat(80)],['x-ratelimit-reset','1700000000']]);
-  global.fetch=async (_url,opts)=>{calls.push(opts); return {ok:false,status:429,headers,text:async()=>'SECRET BODY '+direct};};
-  try {
-    const r=await run(direct); assert.equal(r.statusCode,502); assert.equal(r.body.error,'ai_unavailable');
-    const entry=JSON.parse(logged[0].slice(logged[0].indexOf('{')));
-    assert.equal(entry.event,'provider_http_error'); assert.equal(entry.http_status,429); assert.equal(entry.retry_after,'30');
-    assert.equal(entry.ratelimit_reset,'1700000000'); assert.ok(entry.ratelimit_remaining.length<=40);
-    assert.doesNotMatch(logged[0],/SECRET|<script>|offline-test-only/); assert.equal(logged[0].includes(direct),false);
-  } finally {console.error=realError;}
-});
 test('tutor system prompt carries the pedagogy rules without changing generation limits', async () => {
   delete process.env.AI_TEACHER_DISABLE_REASONING; await run(direct); const body=JSON.parse(calls[0].body); const sys=body.messages[0].content;
-  assert.match(sys,/سعر البيع = التكلفة × \(1 \+ نسبة الزيادة\)/); assert.match(sys,/سعر البيع = التكلفة ÷ \(1 − هامش الربح\)/);
+  assert.match(sys,/التكلفة × \(1 \+ الزيادة\)/); assert.match(sys,/التكلفة ÷ \(1 − الهامش\)/);
   assert.match(sys,/الدينار الجزائري/); assert.match(sys,/لا تقدّم نسب رسوم بوابات الدفع/);
   assert.equal(body.max_tokens,8192); assert.deepEqual(body.reasoning,{effort:'low'});
+});
+
+// ── تشخيص أخطاء المزوّد: حقول موثقة فقط، بحدود قراءة، بلا تسريب ──
+function parsedLog(logged){ const line=logged.find(l=>l.includes('provider_')); return JSON.parse(line.slice(line.indexOf('{'))); }
+test('HTTP 429 logs documented metadata and Retry-After, never message or raw payload', async () => {
+  const realError=console.error, logged=[]; console.error=(...args)=>logged.push(args.join(' '));
+  const body={error:{code:429,message:'PRIVATE MESSAGE '+direct,metadata:{error_type:'rate_limit_exceeded',provider_code:'429',provider_name:'DeepInfra',raw:'SECRET RAW',flagged_input:'PRIVATE FLAG'}}};
+  global.fetch=async (_url,opts)=>{calls.push(opts); return {ok:false,status:429,headers:new Map([['retry-after','30']]),text:async()=>JSON.stringify(body)};};
+  try {
+    const r=await run(direct); assert.equal(r.statusCode,502); assert.equal(r.body.error,'ai_unavailable');
+    const e=parsedLog(logged);
+    assert.equal(e.http_status,429); assert.equal(e.error_code,429); assert.equal(e.error_type,'rate_limit_exceeded');
+    assert.equal(e.provider_code,'429'); assert.equal(e.provider_name,'DeepInfra'); assert.equal(e.retry_after,'30'); assert.equal(e.category,'rate_limit');
+    assert.doesNotMatch(logged[0],/PRIVATE|SECRET|offline-test-only/); assert.equal(logged[0].includes(direct),false);
+    assert.equal(r.body.provider_name,undefined);
+  } finally {console.error=realError;}
+});
+for (const [status, limit_source, category] of [[402,undefined,'insufficient_credits'],[402,'openrouter_in_flight_budget','budget_limit']]) {
+  test(`402 classified as ${category}`, async () => {
+    const realError=console.error, logged=[]; console.error=(...args)=>logged.push(args.join(' '));
+    const md=limit_source?{limit_source}:{};
+    global.fetch=async (_url,opts)=>{calls.push(opts); return {ok:false,status,text:async()=>JSON.stringify({error:{code:402,message:'x',metadata:md}})};};
+    try { const r=await run(direct); assert.equal(r.body.error,'ai_unavailable'); assert.equal(parsedLog(logged).category,category); }
+    finally {console.error=realError;}
+  });
+}
+test('invalid JSON error body logs only status and never throws', async () => {
+  const realError=console.error, logged=[]; console.error=(...args)=>logged.push(args.join(' '));
+  global.fetch=async (_url,opts)=>{calls.push(opts); return {ok:false,status:502,text:async()=>'<html>PRIVATE gateway page</html>'};};
+  try { const r=await run(direct); assert.equal(r.statusCode,502); const e=parsedLog(logged); assert.equal(e.http_status,502); assert.equal(e.error_type,undefined); assert.doesNotMatch(logged[0],/PRIVATE/); }
+  finally {console.error=realError;}
+});
+test('oversized error body is not parsed or logged', async () => {
+  const realError=console.error, logged=[]; console.error=(...args)=>logged.push(args.join(' '));
+  const big=JSON.stringify({error:{code:429,message:'A'.repeat(20000),metadata:{error_type:'rate_limit_exceeded'}}});
+  global.fetch=async (_url,opts)=>{calls.push(opts); return {ok:false,status:429,text:async()=>big};};
+  try { const r=await run(direct); assert.equal(r.statusCode,502); const e=parsedLog(logged); assert.equal(e.error_type,undefined); assert.equal(e.category,'rate_limit'); assert.doesNotMatch(logged[0],/AAAA/); }
+  finally {console.error=realError;}
+});
+test('streamed error body is read up to the cap and then cancelled', async () => {
+  const realError=console.error, logged=[]; console.error=(...args)=>logged.push(args.join(' '));
+  let cancelled=false; let pulls=0; const enc=new TextEncoder();
+  const chunk=enc.encode('x'.repeat(4096));
+  const body={getReader(){return {read:async()=>{pulls++; return {done:false,value:chunk};}, cancel:async()=>{cancelled=true;}};}};
+  global.fetch=async (_url,opts)=>{calls.push(opts); return {ok:false,status:429,body};};
+  try { const r=await run(direct); assert.equal(r.statusCode,502); assert.equal(cancelled,true); assert.ok(pulls<=6); assert.equal(parsedLog(logged).category,'rate_limit'); }
+  finally {console.error=realError;}
+});
+test('streamed small error body is parsed through the stream reader', async () => {
+  const realError=console.error, logged=[]; console.error=(...args)=>logged.push(args.join(' '));
+  const enc=new TextEncoder(); const bytes=enc.encode(JSON.stringify({error:{code:503,metadata:{error_type:'provider_unavailable',provider_name:'Novita'}}}));
+  let sent=false; const body={getReader(){return {read:async()=>sent?{done:true}:(sent=true,{done:false,value:bytes}), cancel:async()=>{}};}};
+  global.fetch=async (_url,opts)=>{calls.push(opts); return {ok:false,status:503,body};};
+  try { await run(direct); const e=parsedLog(logged); assert.equal(e.error_type,'provider_unavailable'); assert.equal(e.provider_name,'Novita'); assert.equal(e.category,'provider_capacity'); }
+  finally {console.error=realError;}
+});
+test('hostile metadata values are sanitized before logging', async () => {
+  const realError=console.error, logged=[]; console.error=(...args)=>logged.push(args.join(' '));
+  const evil={error:{code:'NaN',metadata:{error_type:'x"}\n<script>'+'a'.repeat(100),provider_code:{nested:'SECRET'},provider_name:'Deep\nInfra'}}};
+  global.fetch=async (_url,opts)=>{calls.push(opts); return {ok:false,status:429,text:async()=>JSON.stringify(evil)};};
+  try { await run(direct); const e=parsedLog(logged); assert.equal(e.error_code,undefined); assert.match(e.error_type,/^[A-Za-z0-9._:\-]{1,40}$/); assert.equal(e.error_type.length,40); assert.equal(e.provider_code,undefined); assert.equal(e.provider_name,'DeepInfra'); assert.doesNotMatch(logged[0],/SECRET|<script>/); }
+  finally {console.error=realError;}
 });
