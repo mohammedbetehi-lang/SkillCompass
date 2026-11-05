@@ -339,23 +339,24 @@ function providerDiagnostics(errObj) {
 }
 
 // تصنيف limit_source مستقل عن HTTP status: وثائق OpenRouter لا تحدد لكل قيمة الرمز الذي تُعاد به.
-const LIMIT_SOURCE_CATEGORY = {
-  openrouter_in_flight_budget: 'in_flight_budget',
-  openrouter_credits: 'credits',
-  openrouter_key_limit: 'key_limit',
-  openrouter_guardrail_budget: 'guardrail_budget',
-  openrouter_workspace_budget: 'workspace_budget',
-};
+// Map لا يرث من Object.prototype، فلا تُعامل مفاتيح مثل constructor أو __proto__ كتصنيفات.
+const LIMIT_SOURCE_CATEGORY = new Map([
+  ['openrouter_in_flight_budget', 'in_flight_budget'],
+  ['openrouter_credits', 'credits'],
+  ['openrouter_key_limit', 'key_limit'],
+  ['openrouter_guardrail_budget', 'guardrail_budget'],
+  ['openrouter_workspace_budget', 'workspace_budget'],
+]);
 
-// error_type الموثقة فقط في صفحة الأخطاء. أي قيمة أخرى لا تُصنَّف، وتُسجَّل كما هي (بعد التنظيف).
-const DOCUMENTED_ERROR_TYPE_CATEGORY = {
-  authentication: 'auth_invalid',
-  payment_required: 'payment_required',
-  permission_denied: 'permission_denied',
-  provider_overloaded: 'provider_capacity',
-  provider_unavailable: 'provider_capacity',
-  timeout: 'timeout',
-};
+// error_type الموثقة فقط في صفحة الأخطاء.
+const DOCUMENTED_ERROR_TYPE_CATEGORY = new Map([
+  ['authentication', 'auth_invalid'],
+  ['payment_required', 'payment_required'],
+  ['permission_denied', 'permission_denied'],
+  ['provider_overloaded', 'provider_capacity'],
+  ['provider_unavailable', 'provider_capacity'],
+  ['timeout', 'timeout'],
+]);
 
 /**
  * rateLimitCategory — مصدر 429 لا يُستنتج إلا من دليل:
@@ -372,15 +373,21 @@ function rateLimitCategory(diag) {
 
 /**
  * classifyProviderError — تصنيف داخلي للسجلات فقط، لا يُعرض للطالب. الترتيب:
- *   1) limit_source (القيم المعروفة، وغيرها unknown_limit_source) — مستقل عن HTTP status.
+ *   1) limit_source معروف.
  *   2) 429 — مصدر الـRate Limit حسب الأدلة أعلاه.
- *   3) error_type الموثق.
- *   4) HTTP status كملاذ أخير.
+ *   3) error_type موثق.
+ *   4) limit_source غير معروف.
+ *   5) HTTP status كملاذ أخير.
  */
 function classifyProviderError(status, diag) {
-  if (diag.limit_source) return LIMIT_SOURCE_CATEGORY[diag.limit_source] || 'unknown_limit_source';
+  const ls = diag.limit_source;
+  const et = diag.error_type;
+  const knownLimit = ls ? LIMIT_SOURCE_CATEGORY.get(ls) : undefined;
+  if (knownLimit) return knownLimit;
   if (status === 429) return rateLimitCategory(diag);
-  if (diag.error_type && DOCUMENTED_ERROR_TYPE_CATEGORY[diag.error_type]) return DOCUMENTED_ERROR_TYPE_CATEGORY[diag.error_type];
+  const documentedType = et ? DOCUMENTED_ERROR_TYPE_CATEGORY.get(et) : undefined;
+  if (documentedType) return documentedType;
+  if (ls) return 'unknown_limit_source';
   if (status === 401) return 'auth_invalid';
   // 402 بلا limit_source ولا error_type موثق: لا دليل على نوع الدفع، فلا يُفترض insufficient_credits.
   if (status === 402) return 'unknown_payment_error';

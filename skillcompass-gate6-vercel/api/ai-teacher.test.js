@@ -380,3 +380,71 @@ test('HTTP 200 provider error logs documented fields only', async () => {
     assert.doesNotMatch(logged[0],/PRIVATE|SECRET|sensitive/); assert.match(logged[0],/provider_unavailable/);
   });
 });
+
+// ── القيم الموروثة من Object.prototype لا تُعامل كتصنيفات ──
+const INHERITED_KEYS=['constructor','toString','__proto__','hasOwnProperty','valueOf'];
+for (const key of INHERITED_KEYS) {
+  test(`inherited limit_source "${key}" is unknown_limit_source, not a prototype value`, async () => {
+    await withLog(async (logged) => {
+      global.fetch=async (_u,opts)=>{calls.push(opts); return {ok:false,status:402,body:errBody({error:{code:402,metadata:{limit_source:key}}})};};
+      await run(direct); const e=parsedLog(logged); assert.equal(e.category,'unknown_limit_source'); assert.equal(typeof e.category,'string');
+    });
+  });
+  test(`inherited error_type "${key}" is not categorized and falls back safely`, async () => {
+    await withLog(async (logged) => {
+      global.fetch=async (_u,opts)=>{calls.push(opts); return {ok:false,status:500,body:errBody({error:{code:500,metadata:{error_type:key}}})};};
+      await run(direct); const e=parsedLog(logged); assert.equal(e.category,'other'); assert.equal(typeof e.category,'string');
+    });
+  });
+}
+test('inherited error_type "constructor" with HTTP 402 falls back to unknown_payment_error', async () => {
+  await withLog(async (logged) => {
+    global.fetch=async (_u,opts)=>{calls.push(opts); return {ok:false,status:402,body:errBody({error:{code:402,metadata:{error_type:'constructor'}}})};};
+    await run(direct); assert.equal(parsedLog(logged).category,'unknown_payment_error');
+  });
+});
+
+// ── ترتيب الأولوية: limit_source معروف > 429 > error_type موثق > limit_source غير معروف > HTTP status ──
+test('unknown limit_source combined with documented error_type payment_required -> payment_required', async () => {
+  await withLog(async (logged) => {
+    global.fetch=async (_u,opts)=>{calls.push(opts); return {ok:false,status:402,body:errBody({error:{code:402,metadata:{error_type:'payment_required',limit_source:'openrouter_mystery'}}})};};
+    await run(direct); const e=parsedLog(logged); assert.equal(e.category,'payment_required'); assert.equal(e.limit_source,'openrouter_mystery');
+  });
+});
+test('known limit_source still takes priority over documented payment_required', async () => {
+  await withLog(async (logged) => {
+    global.fetch=async (_u,opts)=>{calls.push(opts); return {ok:false,status:402,body:errBody({error:{code:402,metadata:{error_type:'payment_required',limit_source:'openrouter_credits'}}})};};
+    await run(direct); assert.equal(parsedLog(logged).category,'credits');
+  });
+});
+test('known limit_source takes priority over a 429 rate-limit classification', async () => {
+  await withLog(async (logged) => {
+    const headers=new Map([['x-ratelimit-limit','1'],['x-ratelimit-remaining','0'],['x-ratelimit-reset','9']]);
+    global.fetch=async (_u,opts)=>{calls.push(opts); return {ok:false,status:429,headers,body:errBody({error:{code:429,metadata:{limit_source:'openrouter_key_limit'}}})};};
+    await run(direct); assert.equal(parsedLog(logged).category,'key_limit');
+  });
+});
+test('unknown limit_source with HTTP 429 is classified as a rate limit, not unknown_limit_source', async () => {
+  await withLog(async (logged) => {
+    global.fetch=async (_u,opts)=>{calls.push(opts); return {ok:false,status:429,body:errBody({error:{code:429,metadata:{limit_source:'openrouter_mystery'}}})};};
+    await run(direct); assert.equal(parsedLog(logged).category,'unknown_rate_limit');
+  });
+});
+test('documented error_type timeout beats unknown limit_source', async () => {
+  await withLog(async (logged) => {
+    global.fetch=async (_u,opts)=>{calls.push(opts); return {ok:false,status:504,body:errBody({error:{code:504,metadata:{error_type:'timeout',limit_source:'openrouter_mystery'}}})};};
+    await run(direct); assert.equal(parsedLog(logged).category,'timeout');
+  });
+});
+test('unknown limit_source with no documented error_type is unknown_limit_source even on HTTP 500', async () => {
+  await withLog(async (logged) => {
+    global.fetch=async (_u,opts)=>{calls.push(opts); return {ok:false,status:500,body:errBody({error:{code:500,metadata:{limit_source:'openrouter_mystery'}}})};};
+    await run(direct); assert.equal(parsedLog(logged).category,'unknown_limit_source');
+  });
+});
+test('HTTP status is used only when no metadata signal exists', async () => {
+  await withLog(async (logged) => {
+    global.fetch=async (_u,opts)=>{calls.push(opts); return {ok:false,status:503,body:errBody({error:{code:503}})};};
+    await run(direct); assert.equal(parsedLog(logged).category,'provider_capacity');
+  });
+});
