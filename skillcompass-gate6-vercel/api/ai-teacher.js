@@ -247,37 +247,36 @@ function safeHttpCode(v) {
   return Number.isInteger(v) && v >= 100 && v <= 599 ? v : undefined;
 }
 
+async function cancelQuietly(reader) {
+  try { await reader.cancel(); } catch { /* ignore */ }
+}
+
 /**
- * readBodyCapped — يقرأ جسم الرد حتى حد بايتات محدد.
- * يلغي القراءة عند تجاوز الحد، ويعيد null إذا تعذّرت القراءة أو تجاوزت الحد.
+ * readBodyCapped — يقرأ جسم الرد من الـStream فقط، بحد أقصى maxBytes بايت.
+ * لا يستخدم text() لأنه يقرأ الجسم كاملاً قبل أي تحقق من الحجم.
+ * عند غياب Stream، أو تجاوز الحد، أو chunk غير صالح، يلغي القراءة ويعيد null.
  */
 async function readBodyCapped(resp, maxBytes) {
+  if (!resp || !resp.body || typeof resp.body.getReader !== 'function') return null;
+  let reader;
   try {
-    if (resp.body && typeof resp.body.getReader === 'function') {
-      const reader = resp.body.getReader();
-      const chunks = [];
-      let total = 0;
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = Buffer.from(value);
-        total += chunk.length;
-        if (total > maxBytes) {
-          try { await reader.cancel(); } catch { /* ignore */ }
-          return null;
-        }
-        chunks.push(chunk);
-      }
-      return Buffer.concat(chunks).toString('utf8');
+    reader = resp.body.getReader();
+    const chunks = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      // تحقق من حجم الـchunk قبل نسخه
+      if (!value || typeof value.byteLength !== 'number') { await cancelQuietly(reader); return null; }
+      if (total + value.byteLength > maxBytes) { await cancelQuietly(reader); return null; }
+      total += value.byteLength;
+      chunks.push(Buffer.from(value));
     }
-    if (typeof resp.text === 'function') {
-      const t = await resp.text();
-      return typeof t === 'string' && Buffer.byteLength(t, 'utf8') <= maxBytes ? t : null;
-    }
+    return Buffer.concat(chunks, total).toString('utf8');
   } catch {
+    if (reader) await cancelQuietly(reader);
     return null;
   }
-  return null;
 }
 
 /** parseProviderError — يستخرج كائن error من JSON، أو null إذا كان الجسم غير صالح. */
@@ -291,7 +290,7 @@ function parseProviderError(text) {
 }
 
 /**
- * providerDiagnostics — الحقول الموثقة فقط: error.code وmetadata.error_type وprovider_code وprovider_name وlimit_source.
+ * providerDiagnostics — الحقول الموثقة فقط من جسم الخطأ.
  * لا تُستخرج message ولا raw ولا flagged_input ولا أي حقل آخر.
  */
 function providerDiagnostics(errObj) {
@@ -308,34 +307,82 @@ function providerDiagnostics(errObj) {
   };
 }
 
-/** classifyProviderError — تصنيف داخلي للسجلات فقط، لا يُعرض للطالب. */
+// قيم limit_source المعروفة (انظر صفحة الأخطاء). openrouter_credits وارد بحسب طلب المراجعة، وغير مؤكد في الصفحة التي قُرئت.
+const LIMIT_SOURCE_CATEGORY_402 = {
+  openrouter_in_flight_budget: 'in_flight_budget',
+  openrouter_credits: 'insufficient_credits',
+  openrouter_key_limit: 'key_limit',
+  openrouter_guardrail_budget: 'guardrail_budget',
+  openrouter_workspace_budget: 'workspace_budget',
+};
+const LIMIT_SOURCE_CATEGORY_403 = {
+  openrouter_guardrail_budget: 'guardrail_budget',
+  openrouter_workspace_budget: 'workspace_budget',
+  openrouter_key_limit: 'key_limit',
+};
+
+/**
+ * classifyProviderError — تصنيف داخلي للسجلات فقط، لا يُعرض للطالب.
+ * يعتمد أولاً على limit_source وerror_type، ثم على HTTP status عند غيابهما.
+ * لا يُستنتج مصدر 429 إلا من دليل موثق:
+ *   - platform_rate_limit: وجود ترويسات X-RateLimit-* (موثقة للحدود التي تفرضها المنصة نفسها).
+ *   - provider_rate_limit: وجود metadata.provider_code (الإشارة الموثقة لخطأ من المزوّد) دون ترويسات المنصة.
+ *   - unknown_rate_limit: لا دليل كافٍ.
+ */
 function classifyProviderError(status, diag) {
-  if (status === 402) return diag.limit_source ? 'budget_limit' : 'insufficient_credits';
-  if (status === 429) return 'rate_limit';
-  if (status === 401 || status === 403) return 'forbidden_or_auth';
-  if (status === 408 || diag.error_type === 'timeout') return 'timeout';
+  const ls = diag.limit_source;
+  const et = diag.error_type || '';
+
+  if (status === 429) {
+    if (diag.platform_rate_limit_headers) return 'platform_rate_limit';
+    if (diag.provider_code) return 'provider_rate_limit';
+    return 'unknown_rate_limit';
+  }
+  if (status === 401) return 'auth_invalid';
+  if (status === 402) {
+    if (!ls) return 'insufficient_credits';
+    return LIMIT_SOURCE_CATEGORY_402[ls] || 'unknown_limit';
+  }
+  if (status === 403) {
+    if (ls && LIMIT_SOURCE_CATEGORY_403[ls]) return LIMIT_SOURCE_CATEGORY_403[ls];
+    if (et === 'content_policy_violation' || et === 'refusal') return 'content_policy';
+    if (et === 'permission_denied') return 'permission_denied';
+    return 'forbidden_other';
+  }
+  if (status === 408 || et === 'timeout') return 'timeout';
   if (status === 502 || status === 503) return 'provider_capacity';
   return 'other';
 }
 
 /**
- * readProviderErrorDiagnostics — ترويسة Retry-After (الموثقة) + الحقول الموثقة من جسم الخطأ المحدود.
- * لا تعيد أي محاولة؛ الغرض التشخيص فقط. لا تُرمى أي استثناءات من هنا.
+ * readProviderErrorDiagnostics — Retry-After وترويسات X-RateLimit-* (الموثقة)،
+ * ثم الحقول الموثقة من جسم الخطأ المحدود. لا تعيد أي محاولة، ولا تُرمي استثناءات.
  */
 async function readProviderErrorDiagnostics(resp) {
-  let retryAfter;
-  try {
-    const v = resp && resp.headers && typeof resp.headers.get === 'function'
-      ? resp.headers.get('retry-after')
-      : null;
-    retryAfter = safeToken(v, 20);
-  } catch { retryAfter = undefined; }
+  const header = (name, max) => {
+    try {
+      const v = resp && resp.headers && typeof resp.headers.get === 'function' ? resp.headers.get(name) : null;
+      return safeToken(v, max);
+    } catch { return undefined; }
+  };
+  const rlLimit = header('x-ratelimit-limit', 20);
+  const rlRemaining = header('x-ratelimit-remaining', 20);
+  const rlReset = header('x-ratelimit-reset', 20);
 
   const text = await readBodyCapped(resp, PROVIDER_BODY_MAX_BYTES);
   const diag = providerDiagnostics(parseProviderError(text));
+  diag.platform_rate_limit_headers = Boolean(rlLimit || rlRemaining || rlReset);
+
   return {
-    retry_after: retryAfter,
-    ...diag,
+    retry_after: header('retry-after', 20),
+    ratelimit_limit: rlLimit,
+    ratelimit_remaining: rlRemaining,
+    ratelimit_reset: rlReset,
+    error_code: diag.error_code,
+    error_type: diag.error_type,
+    provider_code: diag.provider_code,
+    provider_name: diag.provider_name,
+    limit_source: diag.limit_source,
     category: classifyProviderError(resp.status, diag),
   };
 }
