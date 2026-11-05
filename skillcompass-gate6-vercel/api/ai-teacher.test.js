@@ -280,7 +280,16 @@ for (const [raw, expected] of [['120',120],['0',0],['  45  ',45],['1.5',undefine
     await withLog(async (logged) => {
       global.fetch=async (_u,opts)=>{calls.push(opts); return {ok:false,status:429,headers:new Map([['retry-after',raw]]),body:errBody({error:{code:429}})};};
       await run(direct); const e=parsedLog(logged); assert.equal(e.retry_after_seconds,expected);
-      assert.equal(logged[0].includes(String(raw).trim()) && String(raw).trim().length>3, false, 'raw value must not be logged');
+      if (expected === undefined) {
+        // قيمة خاطئة: لا تُسجَّل خاماً مهما كان طولها
+        // الفحص على السجل كاملاً. الحاجة غير فارغة، لأن needle فارغ يطابق كل نص ويفشل دائماً.
+        const needle = String(raw).trim();
+        assert.ok(needle.length > 0, 'needle must not be empty');
+        assert.equal(JSON.stringify(logged).includes(needle), false, 'invalid raw Retry-After must not be logged in any line');
+      } else {
+        // قيمة صالحة: تُسجَّل كرقم، لا كنص
+        assert.strictEqual(typeof e.retry_after_seconds, 'number');
+      }
     });
   });
 }
@@ -290,13 +299,30 @@ test('Retry-After as HTTP-date is logged as seconds, the raw date is never logge
     global.fetch=async (_u,opts)=>{calls.push(opts); return {ok:false,status:429,headers:new Map([['retry-after',future]]),body:errBody({error:{code:429}})};};
     await run(direct); const e=parsedLog(logged);
     assert.ok(e.retry_after_seconds>=85 && e.retry_after_seconds<=90, String(e.retry_after_seconds));
-    assert.doesNotMatch(logged[0],/GMT/);
+    assert.doesNotMatch(JSON.stringify(logged),/GMT/);
   });
 });
 test('invalid Retry-After is omitted and not logged', async () => {
   await withLog(async (logged) => {
     global.fetch=async (_u,opts)=>{calls.push(opts); return {ok:false,status:429,headers:new Map([['retry-after','SOON-ish <b>'.repeat(10)]]),body:errBody({error:{code:429}})};};
-    await run(direct); const e=parsedLog(logged); assert.equal(e.retry_after_seconds,undefined); assert.doesNotMatch(logged[0],/SOON|<b>/);
+    await run(direct); const e=parsedLog(logged); assert.equal(e.retry_after_seconds,undefined); assert.doesNotMatch(JSON.stringify(logged),/SOON|<b>/);
+  });
+});
+test('unparseable Retry-After with a unique marker: key omitted and marker never logged', async () => {
+  await withLog(async (logged) => {
+    const marker='RA-MARKER-7f3k';
+    global.fetch=async (_u,opts)=>{calls.push(opts); return {ok:false,status:429,headers:new Map([['retry-after',marker]]),body:errBody({error:{code:429}})};};
+    await run(direct); const e=parsedLog(logged);
+    assert.equal('retry_after_seconds' in e, false, 'unparseable value must not produce a retry_after_seconds key');
+    assert.equal(JSON.stringify(logged).includes(marker), false, 'raw Retry-After must not appear in any log line');
+  });
+});
+test('numeric Retry-After "3" is logged as the number 3, not a string', async () => {
+  await withLog(async (logged) => {
+    global.fetch=async (_u,opts)=>{calls.push(opts); return {ok:false,status:429,headers:new Map([['retry-after','3']]),body:errBody({error:{code:429}})};};
+    await run(direct); const e=parsedLog(logged);
+    assert.strictEqual(typeof e.retry_after_seconds, 'number');
+    assert.strictEqual(e.retry_after_seconds, 3);
   });
 });
 
