@@ -31,10 +31,10 @@ test('Preview opt-in applies only to Qwen 3.7 tutor request', async () => {
   process.env.AI_TEACHER_DISABLE_REASONING='true'; const r=await run(direct); assert.equal(r.body.allowed,true); assert.equal(calls.length,1);
   const body=JSON.parse(calls[0].body); assert.deepEqual(body.reasoning,{enabled:false}); assert.equal(body.max_tokens,1024); assert.ok(calls[0].signal);
 });
-test('classifier request is unaffected by tutor flag', async () => {
+test('classifier request is unaffected by tutor flag but shares the request budget signal', async () => {
   process.env.AI_TEACHER_DISABLE_REASONING='true'; global.fetch=async (_url,opts)=>{ calls.push(opts); return reply({choices:[{message:{content:JSON.stringify({in_scope:false,reason:'out'})}}]}); };
   const r=await run('ما عاصمة اليابان؟'); assert.equal(r.body.allowed,false); assert.equal(calls.length,1);
-  const body=JSON.parse(calls[0].body); assert.equal(body.reasoning,undefined); assert.equal(body.max_tokens,80); assert.equal(calls[0].signal,undefined);
+  const body=JSON.parse(calls[0].body); assert.equal(body.reasoning,undefined); assert.equal(body.max_tokens,80); assert.ok(calls[0].signal,'classifier must be bound to the request budget');
 });
 for (const flag of [undefined,'not-valid']) test(`missing/invalid flag ${flag} preserves prior tutor options`, async () => {
   if(flag===undefined) delete process.env.AI_TEACHER_DISABLE_REASONING; else process.env.AI_TEACHER_DISABLE_REASONING=flag;
@@ -56,12 +56,135 @@ test('a different tutor model is not given disabled reasoning', async () => {
   assert.equal(body.model,'other/provider-model'); assert.deepEqual(body.reasoning,{effort:'low'}); assert.equal(body.max_tokens,8192);
   delete process.env.OPENROUTER_MODEL;
 });
-for (const reason of ['length',null,'content_filter']) test(`non-normal finish ${reason} is not presented as a complete answer`, async () => {
+for (const reason of ['length','content_filter','tool_calls']) test(`non-normal finish ${reason} is not presented as a complete answer`, async () => {
   global.fetch=async (_url,opts)=>{calls.push(opts); return reply(completion(reason));};
   const r=await run(direct); assert.equal(r.statusCode,502); assert.equal(r.body.error,'incomplete_generation'); assert.equal(r.body.answer,undefined);
 });
 test('normal finish is accepted with the actual answer', async () => {
   const r=await run(direct); assert.equal(r.body.allowed,true); assert.equal(r.body.answer,'إجابة تعليمية تجريبية');
+});
+// ── سياسة finish_reason ──
+test('finish_reason null with non-empty content is accepted and logged as missing', async () => {
+  await withLog(async (logged) => {
+    global.fetch=async (_url,opts)=>{calls.push(opts); return reply(completion(null));};
+    const r=await run(direct); assert.equal(r.statusCode,200); assert.equal(r.body.answer,'إجابة تعليمية تجريبية');
+    assert.ok(logged.some(l=>l.includes('finish_reason_missing')), 'missing finish_reason must be logged');
+  });
+});
+test('finish_reason field absent with non-empty content is accepted', async () => {
+  global.fetch=async (_url,opts)=>{calls.push(opts); return reply({choices:[{message:{content:'إجابة تعليمية تجريبية'}}]});};
+  const r=await run(direct); assert.equal(r.body.answer,'إجابة تعليمية تجريبية');
+});
+test('finish_reason null with empty content returns the safe fallback, not a complete answer', async () => {
+  global.fetch=async (_url,opts)=>{calls.push(opts); return reply({choices:[{finish_reason:null,message:{content:''}}]});};
+  const r=await run(direct); assert.equal(r.body.fallback,true); assert.match(r.body.answer,/مشغول/);
+});
+// ── حماية الاقتطاع عند غياب finish_reason: completion_tokens مقارنةً بـmax_tokens ──
+const noFinish = (usage, extra = {}) => reply({choices:[{message:{content:'إجابة تعليمية تجريبية'}, ...extra}], ...(usage === undefined ? {} : {usage})});
+function defaultTutorMode(){ delete process.env.AI_TEACHER_DISABLE_REASONING; }
+test('missing finish_reason with completion_tokens exactly equal to max_tokens is rejected as truncated', async () => {
+  defaultTutorMode();
+  await withLog(async (logged) => {
+    global.fetch=async (_u,opts)=>{calls.push(opts); return noFinish({completion_tokens:8192});};
+    const r=await run(direct); assert.equal(r.statusCode,502); assert.equal(r.body.error,'incomplete_generation'); assert.equal(r.body.answer,undefined);
+    const line=logged.find(l=>l.includes('incomplete_generation')); assert.ok(line,'rejection must be logged');
+    assert.ok(line.includes('"completion_tokens":8192') && line.includes('"max_tokens":8192'));
+  });
+});
+test('missing finish_reason with completion_tokens one below max_tokens is accepted and logged', async () => {
+  defaultTutorMode();
+  await withLog(async (logged) => {
+    global.fetch=async (_u,opts)=>{calls.push(opts); return noFinish({completion_tokens:8191});};
+    const r=await run(direct); assert.equal(r.statusCode,200); assert.equal(r.body.answer,'إجابة تعليمية تجريبية');
+    const line=logged.find(l=>l.includes('finish_reason_missing')); assert.ok(line,'missing finish_reason must be logged');
+    assert.ok(line.includes('"usage_available":true') && line.includes('"completion_tokens":8191'));
+  });
+});
+test('missing finish_reason with completion_tokens above max_tokens is rejected', async () => {
+  defaultTutorMode();
+  global.fetch=async (_u,opts)=>{calls.push(opts); return noFinish({completion_tokens:8193});};
+  const r=await run(direct); assert.equal(r.body.error,'incomplete_generation'); assert.equal(r.body.answer,undefined);
+});
+test('null finish_reason with completion_tokens equal to max_tokens is rejected', async () => {
+  defaultTutorMode();
+  global.fetch=async (_u,opts)=>{calls.push(opts); return reply({choices:[{finish_reason:null,message:{content:'إجابة تعليمية تجريبية'}}],usage:{completion_tokens:8192}});};
+  const r=await run(direct); assert.equal(r.body.error,'incomplete_generation'); assert.equal(r.body.answer,undefined);
+});
+test('missing finish_reason without usage is accepted but logged as usage unavailable', async () => {
+  defaultTutorMode();
+  await withLog(async (logged) => {
+    global.fetch=async (_u,opts)=>{calls.push(opts); return noFinish(undefined);};
+    const r=await run(direct); assert.equal(r.body.answer,'إجابة تعليمية تجريبية');
+    const line=logged.find(l=>l.includes('finish_reason_missing')); assert.ok(line);
+    assert.ok(line.includes('"usage_available":false') && line.includes('"completion_tokens":null'), 'must not claim completeness');
+  });
+});
+test('missing finish_reason with usage lacking completion_tokens is accepted as unavailable', async () => {
+  defaultTutorMode();
+  await withLog(async (logged) => {
+    global.fetch=async (_u,opts)=>{calls.push(opts); return noFinish({prompt_tokens:10});};
+    const r=await run(direct); assert.equal(r.body.answer,'إجابة تعليمية تجريبية');
+    assert.ok(logged.some(l=>l.includes('"usage_available":false')));
+  });
+});
+test('non-numeric completion_tokens is treated as unavailable, not compared', async () => {
+  defaultTutorMode();
+  global.fetch=async (_u,opts)=>{calls.push(opts); return noFinish({completion_tokens:'9000'});};
+  const r=await run(direct); assert.equal(r.body.answer,'إجابة تعليمية تجريبية');
+});
+test('a stop finish_reason is never subject to the token-limit check', async () => {
+  defaultTutorMode();
+  global.fetch=async (_u,opts)=>{calls.push(opts); return reply({choices:[{finish_reason:'stop',message:{content:'إجابة تعليمية تجريبية'}}],usage:{completion_tokens:8192}});};
+  const r=await run(direct); assert.equal(r.body.answer,'إجابة تعليمية تجريبية');
+});
+test('reasoning-disabled preview uses max_tokens 1024 as the truncation threshold', async () => {
+  process.env.AI_TEACHER_DISABLE_REASONING='true';
+  global.fetch=async (_u,opts)=>{calls.push(opts); return noFinish({completion_tokens:1024});};
+  const r=await run(direct); assert.equal(JSON.parse(calls[0].body).max_tokens,1024); assert.equal(r.body.error,'incomplete_generation');
+  global.fetch=async (_u,opts)=>{calls.push(opts); return noFinish({completion_tokens:1023});};
+  const r2=await run(direct); assert.equal(r2.body.answer,'إجابة تعليمية تجريبية');
+  defaultTutorMode();
+});
+test('finish_reason length never exposes partial text', async () => {
+  global.fetch=async (_url,opts)=>{calls.push(opts); return reply({choices:[{finish_reason:'length',message:{content:'نص مقطوع'}}]});};
+  const r=await run(direct); assert.equal(r.statusCode,502); assert.equal(r.body.error,'incomplete_generation'); assert.equal(r.body.answer,undefined);
+});
+test('unknown string finish_reason is rejected and its logged value is sanitized', async () => {
+  await withLog(async (logged) => {
+    global.fetch=async (_url,opts)=>{calls.push(opts); return reply({choices:[{finish_reason:'bad<<ZZ>>',message:{content:'نص'}}]});};
+    const r=await run(direct); assert.equal(r.body.error,'incomplete_generation');
+    const line=logged.find(l=>l.includes('incomplete_generation')); assert.ok(line,'rejection must be logged');
+    assert.ok(line.includes('"finish_reason":"badZZ"'), 'only the sanitized token is logged');
+    assert.equal(line.includes('<'), false);
+  });
+});
+// ── ميزانية مشتركة للمصنّف والمعلم ──
+test('classifier that never answers is aborted by the shared budget: ai_timeout, no tutor call', async () => {
+  global.setTimeout=(fn,ms,...args)=>realSetTimeout(fn,1,...args);
+  global.fetch=async (_url,opts)=>{calls.push(opts); return new Promise((_,rej)=>{const ab=()=>rej(new Error('aborted')); if(opts.signal.aborted) ab(); else opts.signal.addEventListener('abort',ab,{once:true});});};
+  const r=await run('اشرح الفكرة من فضلك');
+  assert.equal(r.statusCode,504); assert.equal(r.body.error,'ai_timeout'); assert.equal(r.body.allowed,undefined); assert.equal(calls.length,1);
+});
+test('classifier and tutor share one budget signal', async () => {
+  global.fetch=async (_url,opts)=>{calls.push(opts); const body=JSON.parse(opts.body);
+    if (body.max_tokens===80) return reply({choices:[{message:{content:JSON.stringify({in_scope:true,reason:'ok'})}}]});
+    return reply(completion());};
+  const r=await run('اشرح الفكرة من فضلك'); assert.equal(r.body.allowed,true); assert.equal(calls.length,2);
+  assert.ok(calls[0].signal); assert.strictEqual(calls[0].signal, calls[1].signal);
+});
+test('the budget timer is cleared on success and on the failure path', async () => {
+  const handles=[], cleared=[]; const realClear=global.clearTimeout;
+  global.setTimeout=(fn,ms,...a)=>{const h=realSetTimeout(fn,ms,...a); handles.push(h); return h;};
+  global.clearTimeout=(h)=>{cleared.push(h); return realClear(h);};
+  try {
+    await run(direct);
+    global.fetch=async()=>{throw new Error('offline simulated network failure');};
+    await run(direct);
+    assert.ok(handles.length>=2, 'each request arms a budget timer');
+    for (const h of handles) assert.ok(cleared.includes(h), 'every budget timer must be cleared');
+  } finally {
+    global.clearTimeout=realClear; global.setTimeout=realSetTimeout;
+  }
 });
 test('timeout is rendered as an error and does not complete a lesson', async () => {
   const html=fs.readFileSync(require('node:path').join(__dirname,'../index.html'),'utf8');
