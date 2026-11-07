@@ -329,7 +329,7 @@ test('a tiny fraction added to a large cost is displayed with its exact digits',
 test('every successful result meets the target exactly (deterministic pseudo-random sweep)', () => {
   let seed = 20260107;
   const rnd = () => {
-    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    seed = (Math.imul(seed, 1103515245) + 12345) & 0x7fffffff;
     return seed / 0x7fffffff;
   };
   const randomDecimal = (maxInt, maxDecimals) => {
@@ -399,3 +399,150 @@ test('the calculator page renders results with textContent only', () => {
   assert.ok(/dir="rtl"/.test(html), 'page must be RTL');
   assert.ok(/name="viewport"/.test(html), 'page must declare a viewport for phones');
 });
+
+
+// ── سلوك الصفحة: تشغيل السكربت الحقيقي للصفحة على DOM مبسّط ──
+const vm = require('node:vm');
+
+function makeFakeDom() {
+  class El {
+    constructor(id) {
+      this.id = id; this.attrs = {}; this.hidden = false; this.className = '';
+      this.children = []; this.listeners = {}; this._text = '';
+      this.value = '';
+    }
+    get textContent() { return this._text; }
+    set textContent(v) { this._text = String(v); this.children = []; }
+    get firstChild() { return this.children[0] || null; }
+    appendChild(c) { this.children.push(c); return c; }
+    removeChild(c) { this.children = this.children.filter((x) => x !== c); return c; }
+    addEventListener(type, fn) { (this.listeners[type] = this.listeners[type] || []).push(fn); }
+    setAttribute(k, v) { this.attrs[k] = String(v); }
+    getAttribute(k) { return this.attrs[k]; }
+    fire(type) { (this.listeners[type] || []).forEach((fn) => fn({ preventDefault() {} })); }
+  }
+  const byId = {};
+  const get = (id) => (byId[id] = byId[id] || new El(id));
+  const document = {
+    getElementById: get,
+    createElement: (tag) => new El(tag),
+    createTextNode: (text) => ({ nodeType: 3, textContent: String(text) }),
+  };
+  return { document, get };
+}
+
+function loadPage(calc) {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'pricing-calculator.html'), 'utf8');
+  const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
+  assert.equal(scripts.length, 1, 'page must have exactly one inline script');
+  const { document, get } = makeFakeDom();
+  const context = { window: { PricingCalculator: calc }, document };
+  vm.runInNewContext(scripts[0][1], context);
+  return { get, html };
+}
+
+test('page: a result-level error is shown in the alert element and hides the result card', () => {
+  const real = require('./pricingCalculator');
+  const stub = {
+    ...real,
+    calculatePrice: () => ({ ok: false, errors: { result: 'target_not_met' } }),
+  };
+  const { get, html } = loadPage(stub);
+  get('cost').value = '2600'; get('fee').value = '2.5'; get('target').value = '1000';
+  get('cost').fire('input');
+
+  assert.match(html, /id="result-error" role="alert"/, 'the result error element must be an alert region');
+  assert.equal(get('result-error').textContent, real.ERROR_MESSAGES.target_not_met);
+  assert.equal(get('result-card').hidden, true, 'result card must be hidden on a result error');
+  assert.equal(get('steps-card').hidden, true, 'steps card must be hidden on a result error');
+  assert.equal(get('practical-price').children.length, 0, 'no stale price may remain');
+});
+
+test('page: the result error is cleared when the next calculation succeeds', () => {
+  const real = require('./pricingCalculator');
+  let fail = true;
+  const stub = {
+    ...real,
+    calculatePrice: (input) => (fail ? { ok: false, errors: { result: 'target_not_met' } } : real.calculatePrice(input)),
+  };
+  const { get } = loadPage(stub);
+  get('cost').value = '2600'; get('fee').value = '2.5'; get('target').value = '1000';
+  get('cost').fire('input');
+  assert.equal(get('result-error').textContent, real.ERROR_MESSAGES.target_not_met);
+
+  fail = false;
+  get('cost').fire('input');
+  assert.equal(get('result-error').textContent, '', 'stale result error must be cleared');
+  assert.equal(get('result-card').hidden, false, 'result card must be visible again');
+});
+
+test('page: field errors still appear next to their own field and not in the result alert', () => {
+  const { get } = loadPage(require('./pricingCalculator'));
+  get('cost').value = 'abc'; get('fee').value = '2.5'; get('target').value = '1000';
+  get('cost').fire('input');
+  assert.equal(get('cost-error').textContent, require('./pricingCalculator').ERROR_MESSAGES.not_a_number);
+  assert.equal(get('cost').getAttribute('aria-invalid'), 'true');
+  assert.equal(get('result-error').textContent, '', 'a field error must not be duplicated in the result alert');
+  assert.equal(get('result-card').hidden, true);
+});
+
+test('page: a valid input renders the exact result through the real calculator', () => {
+  const { get } = loadPage(require('./pricingCalculator'));
+  get('cost').value = '2600'; get('fee').value = '2.5'; get('target').value = '1000';
+  get('cost').fire('input');
+  assert.equal(get('result-card').hidden, false);
+  assert.equal(get('practical-price').children[0].textContent, '3693');
+  assert.equal(get('fee-amount').children[0].textContent, '92.325');
+  assert.equal(get('actual-net').children[0].textContent, '1000.675');
+  assert.equal(get('result-error').textContent, '');
+});
+
+// ── خاصية العرض: السعر الدقيق المعروض لا يناقض السعر العملي ──
+// إذا ظهر السعر الدقيق عدداً صحيحاً فيجب أن يساوي السعر العملي؛ وإن كان غير صحيح فلا يمكن أن يُعرض عدداً صحيحاً.
+test('display invariant: an integer-looking exact price always equals the practical price', () => {
+  const r0 = ok('1000', '0', '0.0000004');
+  assert.equal(r0.exactPrice, '1000.0000004', 'non-integer exact value must not be shown as an integer');
+  assert.equal(r0.practicalPrice, '1001');
+  // جزء صحيح صفري مع كسر: السعر العملي = 0 + 1
+  const z = ok('0', '0', '0.0000000001');
+  assert.equal(z.exactPrice, '0.0000000001');
+  assert.equal(z.practicalPrice, '1');
+
+  let seed = 424242;
+  // Math.imul يضرب بأعداد صحيحة 32-bit دون فقدان دقة، بخلاف الضرب العادي الذي يتجاوز 2^53
+  const rnd = () => { seed = (Math.imul(seed, 1103515245) + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+  const digits = (k) => Array.from({ length: k }, () => Math.floor(rnd() * 10)).join('');
+  const extremes = [
+    ['0', '0', '0.0000000001'], ['1000000000', '99.9999999999', '0.0000000001'],
+    ['0.0000000001', '99.9999999999', '0.0000000001'], ['999999.9999999999', '0.0000000001', '0.0000000001'],
+  ];
+  const cases = [...extremes];
+  for (let i = 0; i < 2000; i += 1) {
+    cases.push([String(Math.floor(rnd() * 1e9)) + '.' + digits(i % 11),
+      String(Math.floor(rnd() * 9999) / 100),
+      String(Math.floor(rnd() * 1e9)) + '.' + digits(i % 11)]);
+  }
+  let checked = 0;
+  for (const [cost, fee, target] of cases) {
+    const r = calculatePrice({ cost, feePercent: fee, targetNet: target });
+    if (!r.ok) continue;
+    checked += 1;
+    const input = 'cost=' + cost + ', fee=' + fee + ', target=' + target;
+    const practical = BigInt(r.practicalPrice);
+    const [intText] = r.exactPrice.split('.');
+    const exactIntPart = BigInt(intText);
+    if (!r.exactPrice.includes('.')) {
+      // سعر دقيق بلا فاصلة عشرية: يجب أن يساوي السعر العملي تماماً
+      assert.equal(BigInt(r.exactPrice), practical,
+        'exactPrice "' + r.exactPrice + '" has no decimal point but practicalPrice "' + r.practicalPrice + '" differs; ' + input);
+    } else {
+      // سعر دقيق بفاصلة عشرية: السعر العملي هو جزؤه الصحيح زائد واحد (التقريب إلى الأعلى)
+      assert.equal(practical, exactIntPart + 1n,
+        'practicalPrice "' + r.practicalPrice + '" must equal integer part ' + exactIntPart + ' + 1 of exactPrice "' + r.exactPrice + '"; ' + input);
+    }
+    assert.ok(exactIntPart <= practical,
+      'display integer part ' + exactIntPart + ' is above practicalPrice "' + r.practicalPrice + '"; ' + input);
+  }
+  assert.ok(checked > 1000, 'only ' + checked + ' valid cases were checked');
+});
+

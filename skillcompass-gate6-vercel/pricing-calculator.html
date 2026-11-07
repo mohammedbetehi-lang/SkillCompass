@@ -50,6 +50,9 @@
     li { margin: 4px 0; }
     .muted { color: var(--muted); font-size: 0.9rem; }
     .theme-toggle { float: left; font-size: 0.85rem; }
+    /* خطأ على مستوى النتيجة (لا يرتبط بحقل): لا يأخذ مساحة إذا كان فارغاً */
+    .result-error { color: var(--bad); font-weight: 600; margin: 0; }
+    .result-error:not(:empty) { margin: 0 0 12px; }
     /* عرض الأرقام: كل رقم يبقى بترتيبه من اليسار إلى اليمين داخل النص العربي */
     .num { direction: ltr; unicode-bidi: isolate; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
     /* وحدة الدينار تبقى ملتصقة بآخر رقم، ولا تنزل وحدها لسطر مستقل */
@@ -95,6 +98,8 @@
     </div>
   </form>
 
+  <p class="result-error" id="result-error" role="alert"></p>
+
   <section class="card" aria-live="polite" id="result-card" hidden>
     <h2 style="font-size:1.1rem;margin:0 0 6px">النتيجة</h2>
     <p class="muted" style="margin:0">سعر البيع العملي الذي تضعه في المتجر:</p>
@@ -131,6 +136,7 @@
     feePercent: document.getElementById('fee-error'),
     targetNet: document.getElementById('target-error'),
   };
+  var resultError = document.getElementById('result-error');
   var resultCard = document.getElementById('result-card');
   var stepsCard = document.getElementById('steps-card');
   var assumptionsCard = document.getElementById('assumptions-card');
@@ -206,6 +212,9 @@
       errorEls[key].textContent = msg;
       fields[key].setAttribute('aria-invalid', msg ? 'true' : 'false');
     });
+
+    // خطأ على مستوى النتيجة لا يرتبط بحقل بعينه: يُعرض صراحة، وتُخفى النتيجة معه
+    resultError.textContent = (!result.ok && result.errors.result) ? calc.ERROR_MESSAGES[result.errors.result] : '';
 
     if (!result.ok) {
       clearOutput();
