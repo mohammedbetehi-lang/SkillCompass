@@ -50,6 +50,21 @@
     li { margin: 4px 0; }
     .muted { color: var(--muted); font-size: 0.9rem; }
     .theme-toggle { float: left; font-size: 0.85rem; }
+    /* عرض الأرقام: كل رقم يبقى بترتيبه من اليسار إلى اليمين داخل النص العربي */
+    .num { direction: ltr; unicode-bidi: isolate; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+    /* وحدة الدينار تبقى ملتصقة بآخر رقم، ولا تنزل وحدها لسطر مستقل */
+    .unit { white-space: nowrap; }
+    /* القيم الطويلة تلتف داخل بطاقتها بدل أن تُقتطع أو تدفع العمود */
+    .row > span:last-child { min-width: 0; overflow-wrap: anywhere; text-align: start; }
+    .big, ol li, ul li { overflow-wrap: anywhere; }
+    .big { line-height: 1.3; }
+    .row > span:first-child { flex-shrink: 0; max-width: 55%; }
+    /* على الهاتف: الاسم فوق القيمة، لتأخذ القيمة الطويلة عرض البطاقة كاملاً */
+    @media (max-width: 480px) {
+      .row { flex-direction: column; gap: 2px; }
+      .row > span:first-child { max-width: 100%; color: var(--muted); font-size: 0.9rem; }
+      .row > span:last-child { font-weight: 600; }
+    }
   </style>
 </head>
 <body>
@@ -124,6 +139,44 @@
     document.getElementById(id).textContent = value;
   }
 
+  // يكتب مبلغاً كعنصرين: الرقم (LTR) ثم وحدة الدينار، بـtextContent فقط.
+  function setMoney(id, value, prefix) {
+    var el = document.getElementById(id);
+    el.textContent = '';
+    if (prefix) el.appendChild(document.createTextNode(prefix));
+    var num = document.createElement('span');
+    num.className = 'num';
+    num.textContent = value;
+    var unit = document.createElement('span');
+    unit.className = 'unit';
+    unit.textContent = ' دج';
+    el.appendChild(num);
+    el.appendChild(unit);
+  }
+
+  // يعرض خطوة حساب: الأرقام والنسب معزولة LTR حتى لا تنعكس ترتيبها داخل الجملة العربية.
+  // الرقم متبوعاً بـ«دج» يُعرض كمجموعة واحدة: مسافة غير قابلة للكسر بين الرقم والوحدة.
+  function renderStep(li, text) {
+    text.split(/(\d[\d.]*%?(?:[  ]دج)?)/).forEach(function (part, i) {
+      if (!part) return;
+      if (i % 2 === 1) {
+        var unitMatch = part.match(/^(.*?)[  ]دج$/);
+        var num = document.createElement('span');
+        num.className = 'num';
+        num.textContent = unitMatch ? unitMatch[1] : part;
+        li.appendChild(num);
+        if (unitMatch) {
+          var unit = document.createElement('span');
+          unit.className = 'unit';
+          unit.textContent = ' دج';
+          li.appendChild(unit);
+        }
+      } else {
+        li.appendChild(document.createTextNode(part));
+      }
+    });
+  }
+
   function clearOutput() {
     resultCard.hidden = true;
     stepsCard.hidden = true;
@@ -135,7 +188,7 @@
     while (list.firstChild) list.removeChild(list.firstChild);
     items.forEach(function (text) {
       var li = document.createElement('li');
-      li.textContent = text;
+      renderStep(li, text);
       list.appendChild(li);
     });
   }
@@ -160,10 +213,10 @@
     }
 
     // القيم نصوص عشرية دقيقة من الحساب؛ السعر الدقيق للعرض التقريبي فقط
-    setText('practical-price', result.practicalPrice + ' دج');
-    setText('exact-price', '≈ ' + result.exactPrice + ' دج');
-    setText('fee-amount', result.feeAmount + ' دج');
-    setText('actual-net', result.actualNet + ' دج');
+    setMoney('practical-price', result.practicalPrice, '');
+    setMoney('exact-price', result.exactPrice, '≈ ');
+    setMoney('fee-amount', result.feeAmount, '');
+    setMoney('actual-net', result.actualNet, '');
     var meets = document.getElementById('meets-target');
     meets.textContent = result.meetsTarget ? 'نعم' : 'لا';
     meets.className = result.meetsTarget ? 'ok' : 'bad';
