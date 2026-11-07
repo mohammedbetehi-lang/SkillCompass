@@ -23,4 +23,4 @@ jobs:
         working-directory: skillcompass-gate6-vercel
         env:
           NODE_OPTIONS: --require=${{ github.workspace }}/.github/scripts/block-test-network.cjs
-        run: node --test lib/scopeGuard.test.js lib/lessonContent.test.js api/ai-teacher.test.js api/ai-teacher.realstream.test.js
+        run: node --test lib/scopeGuard.test.js lib/lessonContent.test.js lib/pricingCalculator.test.js api/ai-teacher.test.js api/ai-teacher.realstream.test.js
