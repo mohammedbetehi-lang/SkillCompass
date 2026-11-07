@@ -159,11 +159,11 @@
       return;
     }
 
-    var f = calc.formatNumber;
-    setText('practical-price', f(result.practicalPrice, 0) + ' دج');
-    setText('exact-price', f(result.exactPrice, 4) + ' دج');
-    setText('fee-amount', f(result.feeAmount, 3) + ' دج');
-    setText('actual-net', f(result.actualNet, 3) + ' دج');
+    // القيم نصوص عشرية دقيقة من الحساب؛ السعر الدقيق للعرض التقريبي فقط
+    setText('practical-price', result.practicalPrice + ' دج');
+    setText('exact-price', '≈ ' + result.exactPrice + ' دج');
+    setText('fee-amount', result.feeAmount + ' دج');
+    setText('actual-net', result.actualNet + ' دج');
     var meets = document.getElementById('meets-target');
     meets.textContent = result.meetsTarget ? 'نعم' : 'لا';
     meets.className = result.meetsTarget ? 'ok' : 'bad';
