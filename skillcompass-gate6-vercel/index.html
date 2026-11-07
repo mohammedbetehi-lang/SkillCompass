@@ -4419,7 +4419,13 @@ async function askAiTeacher() {
     });
     const data = await res.json();
 
-    if (data.error) {
+    if (data.error === 'ai_timeout') {
+      el.textContent = 'انتهت مهلة إجابة المعلم الذكي. حاول مرة أخرى لاحقًا.';
+    } else if (data.error === 'incomplete_generation') {
+      el.textContent = 'لم تكتمل إجابة المعلم الذكي. حاول مرة أخرى لاحقًا.';
+    } else if (data.error === 'provider_error' || data.error === 'ai_unavailable') {
+      el.textContent = 'تعذر على مزوّد المعلم الذكي معالجة الطلب. حاول مرة أخرى لاحقًا.';
+    } else if (data.error) {
       el.textContent = 'حدث خطأ، حاول مرة أخرى لاحقاً.';
     } else if (data.allowed === false) {
       el.textContent = data.message;

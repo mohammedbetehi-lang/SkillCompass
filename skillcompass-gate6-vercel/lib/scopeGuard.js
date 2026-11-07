@@ -281,7 +281,7 @@ const INSTRUCTION_OVERRIDE_PHRASES = [
 
 async function classifyWithModel({
   apiKey, model, skillName, lessonTitle, lessonKeywords, question,
-  simulationMode = false, skillSimulationKeywords = [], lessonContent = '',
+  simulationMode = false, skillSimulationKeywords = [], lessonContent = '', signal,
 }) {
   const classifierSystemPrompt = `أنت مصنّف نطاق (scope classifier) فقط. لست معلماً ولا تُجب على أي سؤال.
 التخصص الحالي: ${skillName}
@@ -309,6 +309,7 @@ ${String(lessonContent || '').slice(0, 2200)}
     ],
     maxTokens: 80,
     temperature: 0,
+    signal,
   });
 
   if (!resp.ok) return { in_scope: false, reason: 'classifier_unavailable' };
@@ -331,6 +332,7 @@ async function checkScope({
   skillId, lessonId, question, apiKey, classifierModel,
   simulationMode = false,
   classifier = classifyWithModel,
+  signal,
 }) {
   const lesson = resolveLesson(skillId, lessonId);
   if (!lesson) return { allowed: false, error: 'unknown_skill_or_lesson' };
@@ -382,6 +384,7 @@ async function checkScope({
       question,
       simulationMode: !!simulationMode,
       skillSimulationKeywords: simulationMode ? simKeywords : [],
+      signal,
     });
     return {
       allowed: !!verdict.in_scope,

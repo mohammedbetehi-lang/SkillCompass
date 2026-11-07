@@ -22,13 +22,15 @@ async function callOpenRouter({
   reasoning,
   temperature,
   referer,
-  title
+  title,
+  signal
 }) {
   // Use the configured model as-is (do NOT force a :free variant).
   const modelToUse = model;
 
   const resp = await fetch(OPENROUTER_URL, {
     method: 'POST',
+    ...(signal ? { signal } : {}),
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`,
