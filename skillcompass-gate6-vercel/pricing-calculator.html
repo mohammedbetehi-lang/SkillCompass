@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>حاسبة التسعير</title>
+  <style>
+    :root {
+      --bg: #f5f7fb; --card: #ffffff; --text: #1d2433; --muted: #5b6475;
+      --line: #d7dde8; --accent: #2355d6; --ok: #1a7f4b; --bad: #b42318;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        --bg: #0f1420; --card: #171e2e; --text: #e8edf7; --muted: #a6b0c3;
+        --line: #2a3448; --accent: #7aa2ff; --ok: #4cc38a; --bad: #ff8a80;
+      }
+    }
+    :root[data-theme="dark"] {
+      --bg: #0f1420; --card: #171e2e; --text: #e8edf7; --muted: #a6b0c3;
+      --line: #2a3448; --accent: #7aa2ff; --ok: #4cc38a; --bad: #ff8a80;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--text);
+      font-family: system-ui, "Segoe UI", Tahoma, sans-serif; line-height: 1.7;
+    }
+    main { max-width: 620px; margin: 0 auto; padding: 16px; }
+    h1 { font-size: 1.4rem; margin: 8px 0 4px; }
+    .lead { color: var(--muted); margin: 0 0 16px; font-size: 0.95rem; }
+    .card {
+      background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+      padding: 16px; margin-bottom: 14px;
+    }
+    label { display: block; font-weight: 600; margin-bottom: 4px; }
+    .hint { color: var(--muted); font-size: 0.85rem; margin: 2px 0 10px; }
+    input[type="text"] {
+      width: 100%; font-size: 16px; padding: 10px 12px; border-radius: 8px;
+      border: 1px solid var(--line); background: var(--bg); color: var(--text);
+      margin-bottom: 4px;
+    }
+    input[aria-invalid="true"] { border-color: var(--bad); }
+    .field-error { color: var(--bad); font-size: 0.9rem; min-height: 1.2em; margin: 0 0 10px; }
+    .field { margin-bottom: 8px; }
+    .big { font-size: 1.6rem; font-weight: 700; color: var(--accent); margin: 4px 0; }
+    .row { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px dashed var(--line); }
+    .row:last-child { border-bottom: 0; }
+    .ok { color: var(--ok); font-weight: 600; }
+    .bad { color: var(--bad); font-weight: 600; }
+    ol, ul { padding-inline-start: 20px; margin: 6px 0; }
+    li { margin: 4px 0; }
+    .muted { color: var(--muted); font-size: 0.9rem; }
+    .theme-toggle { float: left; font-size: 0.85rem; }
+    /* خطأ على مستوى النتيجة (لا يرتبط بحقل): لا يأخذ مساحة إذا كان فارغاً */
+    .result-error { color: var(--bad); font-weight: 600; margin: 0; }
+    .result-error:not(:empty) { margin: 0 0 12px; }
+    /* عرض الأرقام: كل رقم يبقى بترتيبه من اليسار إلى اليمين داخل النص العربي */
+    .num { direction: ltr; unicode-bidi: isolate; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+    /* وحدة الدينار تبقى ملتصقة بآخر رقم، ولا تنزل وحدها لسطر مستقل */
+    .unit { white-space: nowrap; }
+    /* القيم الطويلة تلتف داخل بطاقتها بدل أن تُقتطع أو تدفع العمود */
+    .row > span:last-child { min-width: 0; overflow-wrap: anywhere; text-align: start; }
+    .big, ol li, ul li { overflow-wrap: anywhere; }
+    .big { line-height: 1.3; }
+    .row > span:first-child { flex-shrink: 0; max-width: 55%; }
+    /* على الهاتف: الاسم فوق القيمة، لتأخذ القيمة الطويلة عرض البطاقة كاملاً */
+    @media (max-width: 480px) {
+      .row { flex-direction: column; gap: 2px; }
+      .row > span:first-child { max-width: 100%; color: var(--muted); font-size: 0.9rem; }
+      .row > span:last-child { font-weight: 600; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>حاسبة التسعير</h1>
+  <p class="lead">تحسب سعر البيع الذي يغطي التكلفة والرسوم ويترك الربح الصافي المطلوب. كل الحسابات تُنفَّذ في المتصفح بمعادلة محددة، ولا يُستخدم أي نموذج ذكاء اصطناعي.</p>
+
+  <form id="pricing-form" novalidate>
+    <div class="card">
+      <div class="field">
+        <label for="cost">التكلفة الإجمالية للمنتج (دج)</label>
+        <p class="hint">شراء + شحن + أي تكلفة أخرى لكل قطعة.</p>
+        <input type="text" id="cost" name="cost" inputmode="decimal" autocomplete="off" aria-describedby="cost-error" aria-invalid="false">
+        <p class="field-error" id="cost-error" role="alert"></p>
+      </div>
+      <div class="field">
+        <label for="fee">نسبة الرسوم من سعر البيع (%)</label>
+        <p class="hint">مثل رسوم بوابة الدفع. تُحسب من سعر البيع وليس من التكلفة، وتكون أقل من 100%.</p>
+        <input type="text" id="fee" name="fee" inputmode="decimal" autocomplete="off" aria-describedby="fee-error" aria-invalid="false">
+        <p class="field-error" id="fee-error" role="alert"></p>
+      </div>
+      <div class="field">
+        <label for="target">الربح الصافي المطلوب (دج)</label>
+        <p class="hint">المبلغ الذي تريد أن يبقى لك بعد التكلفة والرسوم.</p>
+        <input type="text" id="target" name="target" inputmode="decimal" autocomplete="off" aria-describedby="target-error" aria-invalid="false">
+        <p class="field-error" id="target-error" role="alert"></p>
+      </div>
+    </div>
+  </form>
+
+  <p class="result-error" id="result-error" role="alert"></p>
+
+  <section class="card" aria-live="polite" id="result-card" hidden>
+    <h2 style="font-size:1.1rem;margin:0 0 6px">النتيجة</h2>
+    <p class="muted" style="margin:0">سعر البيع العملي الذي تضعه في المتجر:</p>
+    <p class="big" id="practical-price"></p>
+    <div class="row"><span>السعر الدقيق قبل التقريب</span><span id="exact-price"></span></div>
+    <div class="row"><span>قيمة الرسوم عند السعر العملي</span><span id="fee-amount"></span></div>
+    <div class="row"><span>الربح الصافي الفعلي</span><span id="actual-net"></span></div>
+    <div class="row"><span>هل يحقق الربح المطلوب؟</span><span id="meets-target"></span></div>
+  </section>
+
+  <section class="card" id="steps-card" hidden>
+    <h2 style="font-size:1.1rem;margin:0 0 6px">خطوات الحساب</h2>
+    <ol id="steps"></ol>
+  </section>
+
+  <section class="card" id="assumptions-card" hidden>
+    <h2 style="font-size:1.1rem;margin:0 0 6px">الافتراضات</h2>
+    <ul id="assumptions"></ul>
+  </section>
+</main>
+
+<script src="lib/pricingCalculator.js"></script>
+<script>
+(function () {
+  var calc = window.PricingCalculator;
+  var form = document.getElementById('pricing-form');
+  var fields = {
+    cost: document.getElementById('cost'),
+    feePercent: document.getElementById('fee'),
+    targetNet: document.getElementById('target'),
+  };
+  var errorEls = {
+    cost: document.getElementById('cost-error'),
+    feePercent: document.getElementById('fee-error'),
+    targetNet: document.getElementById('target-error'),
+  };
+  var resultError = document.getElementById('result-error');
+  var resultCard = document.getElementById('result-card');
+  var stepsCard = document.getElementById('steps-card');
+  var assumptionsCard = document.getElementById('assumptions-card');
+
+  function setText(id, value) {
+    document.getElementById(id).textContent = value;
+  }
+
+  // يكتب مبلغاً كعنصرين: الرقم (LTR) ثم وحدة الدينار، بـtextContent فقط.
+  function setMoney(id, value, prefix) {
+    var el = document.getElementById(id);
+    el.textContent = '';
+    if (prefix) el.appendChild(document.createTextNode(prefix));
+    var num = document.createElement('span');
+    num.className = 'num';
+    num.textContent = value;
+    var unit = document.createElement('span');
+    unit.className = 'unit';
+    unit.textContent = ' دج';
+    el.appendChild(num);
+    el.appendChild(unit);
+  }
+
+  // يعرض خطوة حساب: الأرقام والنسب معزولة LTR حتى لا تنعكس ترتيبها داخل الجملة العربية.
+  // الرقم متبوعاً بـ«دج» يُعرض كمجموعة واحدة: مسافة غير قابلة للكسر بين الرقم والوحدة.
+  function renderStep(li, text) {
+    text.split(/(\d[\d.]*%?(?:[  ]دج)?)/).forEach(function (part, i) {
+      if (!part) return;
+      if (i % 2 === 1) {
+        var unitMatch = part.match(/^(.*?)[  ]دج$/);
+        var num = document.createElement('span');
+        num.className = 'num';
+        num.textContent = unitMatch ? unitMatch[1] : part;
+        li.appendChild(num);
+        if (unitMatch) {
+          var unit = document.createElement('span');
+          unit.className = 'unit';
+          unit.textContent = ' دج';
+          li.appendChild(unit);
+        }
+      } else {
+        li.appendChild(document.createTextNode(part));
+      }
+    });
+  }
+
+  function clearOutput() {
+    resultCard.hidden = true;
+    stepsCard.hidden = true;
+    assumptionsCard.hidden = true;
+  }
+
+  function fillList(listId, items) {
+    var list = document.getElementById(listId);
+    while (list.firstChild) list.removeChild(list.firstChild);
+    items.forEach(function (text) {
+      var li = document.createElement('li');
+      renderStep(li, text);
+      list.appendChild(li);
+    });
+  }
+
+  function render() {
+    var raw = {
+      cost: fields.cost.value,
+      feePercent: fields.feePercent.value,
+      targetNet: fields.targetNet.value,
+    };
+    var result = calc.calculatePrice(raw);
+
+    Object.keys(fields).forEach(function (key) {
+      var msg = result.ok ? '' : (result.errors[key] ? calc.ERROR_MESSAGES[result.errors[key]] : '');
+      errorEls[key].textContent = msg;
+      fields[key].setAttribute('aria-invalid', msg ? 'true' : 'false');
+    });
+
+    // خطأ على مستوى النتيجة لا يرتبط بحقل بعينه: يُعرض صراحة، وتُخفى النتيجة معه
+    resultError.textContent = (!result.ok && result.errors.result) ? calc.ERROR_MESSAGES[result.errors.result] : '';
+
+    if (!result.ok) {
+      clearOutput();
+      return;
+    }
+
+    // القيم نصوص عشرية دقيقة من الحساب؛ السعر الدقيق للعرض التقريبي فقط
+    setMoney('practical-price', result.practicalPrice, '');
+    setMoney('exact-price', result.exactPrice, '≈ ');
+    setMoney('fee-amount', result.feeAmount, '');
+    setMoney('actual-net', result.actualNet, '');
+    var meets = document.getElementById('meets-target');
+    meets.textContent = result.meetsTarget ? 'نعم' : 'لا';
+    meets.className = result.meetsTarget ? 'ok' : 'bad';
+
+    fillList('steps', result.steps);
+    fillList('assumptions', result.assumptions);
+    resultCard.hidden = false;
+    stepsCard.hidden = false;
+    assumptionsCard.hidden = false;
+  }
+
+  form.addEventListener('submit', function (e) { e.preventDefault(); render(); });
+  Object.keys(fields).forEach(function (key) {
+    fields[key].addEventListener('input', render);
+  });
+  // لا تظهر رسائل الخطأ قبل أن يكتب المستخدم شيئاً
+  clearOutput();
+})();
+</script>
+</body>
+</html>
