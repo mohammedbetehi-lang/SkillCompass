@@ -11,7 +11,8 @@ const ROOT = path.join(__dirname, '..');
 const HTML = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
 
 // ── DOM وهمي minimal: كل id يُنشأ عند أول قراءة ──
-class ClassList {+  constructor() { this.set = new Set(); }
+class ClassList {
+  constructor() { this.set = new Set(); }
   add(...c) { c.forEach((x) => this.set.add(x)); }
   remove(...c) { c.forEach((x) => this.set.delete(x)); }
   contains(c) { return this.set.has(c); }
