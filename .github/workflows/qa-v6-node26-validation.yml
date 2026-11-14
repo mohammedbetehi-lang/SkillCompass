@@ -5,6 +5,7 @@ on:
     branches:
       - qa/v6-node26-validation
       - fix/qa-v6-review-followups
+      - fix/progress-skill-whitelist
   workflow_dispatch:
 
 permissions:
