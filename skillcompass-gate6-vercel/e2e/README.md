@@ -38,6 +38,7 @@ npm run test:e2e:qa
 - التعامل مع بيانات التقدم التالفة دون إسقاط SkillCoins.
 - سلامة مسارات الملفات والروابط الرمزية في خادم الاختبار.
 - فحص أخطاء الصفحة وConsole وفشل تحميل الملفات المحلية، والتحقق من نطاقات الطلبات الخارجية المحجوبة.
+- اختبار API فعلي على Preview: GET غير مسموح (405)، بيانات مهارة/درس غير صالحة (400)، سؤال مطابق للدرس يُنتج إجابة، وسؤال خارج النطاق يُرفض.
 
 ## قيد الترحيل القديم
 
@@ -50,3 +51,8 @@ npm run test:e2e:qa
 ```bash
 node --test lib/localProfile.test.js lib/marketingBudget.test.js lib/indexPage.test.js
 ```
+
+
+## اختبار API على Preview
+
+يشغّل Workflow `preview-api-smoke.cjs` على عنوان فرع Preview. يختبر طريقة HTTP، والتحقق من المدخلات، واستجابة المعلم لسؤال من درس التجارة الإلكترونية 4، ورفض سؤال خارج نطاق الدرس. يعتمد الطلب على إعدادات OpenRouter الموجودة في Preview؛ لا يقرأ المفتاح ولا يمرره من GitHub Actions. إذا كانت حماية Vercel مفعلة، يستخدم الاختبار `VERCEL_AUTOMATION_BYPASS_SECRET` الاختياري من GitHub Actions Secrets دون طباعته.
