@@ -60,11 +60,15 @@ jobs:
         working-directory: skillcompass-gate6-vercel
         run: npm run test:e2e:qa
       - name: Smoke-test AI Teacher Preview API
+        if: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET != '' }}
         working-directory: skillcompass-gate6-vercel
         env:
           AI_TEACHER_PREVIEW_URL: https://skillcompass-skillcompass-gate6-git-6bb482-betehimohammed-9229.vercel.app
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: node e2e/preview-api-smoke.cjs
+      - name: Explain skipped Preview API smoke test
+        if: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET == '' }}
+        run: echo "::warning::Preview API POST smoke test skipped because GitHub Actions secret VERCEL_AUTOMATION_BYPASS_SECRET is not configured."
       - name: Verify production-only install excludes Playwright
         working-directory: skillcompass-gate6-vercel
         run: |

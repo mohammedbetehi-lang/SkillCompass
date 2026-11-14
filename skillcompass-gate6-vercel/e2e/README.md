@@ -55,4 +55,4 @@ node --test lib/localProfile.test.js lib/marketingBudget.test.js lib/indexPage.t
 
 ## اختبار API على Preview
 
-يشغّل Workflow `preview-api-smoke.cjs` على عنوان فرع Preview. يختبر طريقة HTTP، والتحقق من المدخلات، واستجابة المعلم لسؤال من درس التجارة الإلكترونية 4، ورفض سؤال خارج نطاق الدرس. يعتمد الطلب على إعدادات OpenRouter الموجودة في Preview؛ لا يقرأ المفتاح ولا يمرره من GitHub Actions. إذا كانت حماية Vercel مفعلة، يستخدم الاختبار `VERCEL_AUTOMATION_BYPASS_SECRET` الاختياري من GitHub Actions Secrets دون طباعته.
+يشغّل Workflow `preview-api-smoke.cjs` على عنوان فرع Preview. يختبر طريقة HTTP، والتحقق من المدخلات، واستجابة المعلم لسؤال من درس التجارة الإلكترونية 4، ورفض سؤال خارج نطاق الدرس. يعتمد الطلب على إعدادات OpenRouter الموجودة في Preview؛ لا يقرأ المفتاح ولا يمرره من GitHub Actions. إذا كانت حماية Vercel مفعلة، يستخدم الاختبار `VERCEL_AUTOMATION_BYPASS_SECRET` من GitHub Actions Secrets دون طباعته. إذا لم يكن السر مضبوطاً، يتخطى CI اختبار POST ويعرض تحذيراً واضحاً بدلاً من الادعاء بأن API قد اختُبر.
