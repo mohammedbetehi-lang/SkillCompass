@@ -29,7 +29,9 @@ async function request(path, options = {}) {
   try {
     body = JSON.parse(text);
   } catch {
-    throw new Error('Expected JSON from ' + path + '; HTTP ' + response.status + '. Preview may still be protected or not ready.');
+    const error = new Error('Expected JSON from ' + path + '; HTTP ' + response.status);
+    error.status = response.status;
+    throw error;
   }
   return { status: response.status, body };
 }
@@ -43,10 +45,14 @@ async function waitForPreview() {
   for (let attempt = 0; attempt < 36; attempt++) {
     try {
       const result = await request('/api/ai-teacher');
-      if (result.status === 405 && /POST/.test(result.body.error || '')) return;
+      if (result.status === 405 && /POST/.test(result.body.error || '')) return true;
       lastStatus = 'HTTP ' + result.status;
     } catch (error) {
       lastStatus = error.message;
+      if (!process.env.VERCEL_AUTOMATION_BYPASS_SECRET && [302, 401, 403].includes(error.status)) {
+        console.warn('SKIP: Preview is protected by Vercel Authentication. Add VERCEL_AUTOMATION_BYPASS_SECRET to GitHub Actions Secrets to run POST smoke tests.');
+        return false;
+      }
     }
     await sleep(5000);
   }
@@ -54,7 +60,8 @@ async function waitForPreview() {
 }
 
 async function main() {
-  await waitForPreview();
+  const ready = await waitForPreview();
+  if (!ready) return;
 
   // Method guard: this route is POST-only.
   const method = await request('/api/ai-teacher');
