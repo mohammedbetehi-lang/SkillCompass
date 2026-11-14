@@ -403,7 +403,7 @@ for (const vp of VIEWPORTS) {
       const ids = await mktIds(page);
       await seedAndReload(page, {
         skillcompass_profile: { name: 'سارة', email: 'sara@example.com', skill: 'marketing', level: 'beginner' },
-        skillcompass_progress: { completedLessons: ids, quizPassedLessons: ids, skillCoins: 0, lastQuizResult: null, simulationUnlocked: { marketing: true } },
+        skillcompass_progress: { completedLessons: ids, quizPassedLessons: ids, skillCoins: 0, lastQuizResult: null, progressSkill: 'marketing', simulationUnlocked: { marketing: true } },
       });
       await page.evaluate(() => { navigateTo('page10'); mktState.phase = 3; saveMktState(); renderMarketingSim(); });
       assert.equal(await page.locator('#mkt-go-lessons').isVisible(), false);
