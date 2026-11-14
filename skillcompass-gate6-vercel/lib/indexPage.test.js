@@ -126,6 +126,7 @@ function seedStorage({ profile, progress, mkt } = {}) {
 const MARKETING_PROFILE = { name: 'سارة', email: 'sara@example.com', skill: 'marketing', level: 'beginner' };
 const unlockedProgress = (skillCoins) => ({
   completedLessons: [], quizPassedLessons: [], skillCoins, lastQuizResult: null,
+  progressSkill: 'marketing',
   simulationUnlocked: { marketing: true },
 });
 
@@ -548,7 +549,7 @@ for (const field of ['completedLessons', 'quizPassedLessons']) {
 test('القوائم تُنظّف: الأرقام الصالحة فقط دون تكرار، والقيم التالفة داخل المصفوفة تُسقط', () => {
   const local = rawStorage({
     skillcompass_profile: BASE_PROFILE,
-    skillcompass_progress: { quizPassedLessons: [1, 1, 'x', null, 2, NaN], completedLessons: [3], skillCoins: 5 },
+    skillcompass_progress: { quizPassedLessons: [1, 1, 'x', null, 2, NaN], completedLessons: [3], skillCoins: 5, progressSkill: 'ecommerce' },
   });
   const { g } = loadPage({ local });
   assert.deepEqual(Array.from(g('userProgress.quizPassedLessons')), [1, 2]);
@@ -622,15 +623,17 @@ test('دورة تبديل: التجارة ← التسويق ← التجارة 
   assert.equal(stored.skillCoins, 135);
 });
 
-test('تقدم قديم مختلط يُنسب إلى المهارة الحالية عند الترحيل ولا يُفقد', () => {
+test('تقدم قديم مختلط بلا علامة مهارة يُحفظ دون نسبته تلقائياً إلى المسار الحالي', () => {
   const local = rawStorage({
     skillcompass_profile: { ...BASE_PROFILE, skill: 'marketing' },
     skillcompass_progress: { completedLessons: [1, 2, 3], quizPassedLessons: [1, 2], skillCoins: 25 },
   });
   const { g } = loadPage({ local });
   assert.equal(g('userProgress.progressSkill'), 'marketing');
-  assert.deepEqual(Array.from(g('userProgress.quizPassedLessons')), [1, 2]);
-  assert.deepEqual(Array.from(g('userProgress.completedLessons')), [1, 2, 3]);
+  assert.deepEqual(Array.from(g('userProgress.quizPassedLessons')), []);
+  assert.deepEqual(Array.from(g('userProgress.completedLessons')), []);
+  assert.deepEqual(Array.from(g('userProgress.legacyUnassignedProgress.quizPassedLessons')), [1, 2]);
+  assert.deepEqual(Array.from(g('userProgress.legacyUnassignedProgress.completedLessons')), [1, 2, 3]);
   assert.equal(g('userProgress.skillCoins'), 25);
 });
 
