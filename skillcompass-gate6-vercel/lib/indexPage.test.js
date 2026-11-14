@@ -521,6 +521,66 @@ test('progressSkill فارغ أو null لا يجعل تقدم legacy موثوق 
   }
 });
 
+for (const marker of ['__proto__', 'constructor', 'toString', 'unknown']) {
+  test(`progressSkill غير معروف (${marker}): يُعزل التقدم ولا يُفقد أو يُنسب لمسار آخر`, () => {
+    const local = rawStorage({
+      skillcompass_profile: { ...BASE_PROFILE, skill: 'marketing' },
+      skillcompass_progress: {
+        completedLessons: [1, 2, 3],
+        quizPassedLessons: [1, 2],
+        skillCoins: 18,
+        progressSkill: marker,
+      },
+    });
+    const { g } = loadPage({ local });
+
+    assert.equal(g('userProgress.progressSkill'), 'marketing', 'تُستخدم علامة المسار المعروفة من الملف الشخصي');
+    assert.deepEqual(Array.from(g('userProgress.completedLessons')), [], 'لا يُنسب التقدم المشكوك فيه للتسويق');
+    assert.deepEqual(Array.from(g('userProgress.quizPassedLessons')), []);
+    assert.deepEqual(Array.from(g('userProgress.legacyUnassignedProgress.completedLessons')), [1, 2, 3]);
+    assert.deepEqual(Array.from(g('userProgress.legacyUnassignedProgress.quizPassedLessons')), [1, 2]);
+    assert.equal(g('userProgress.skillCoins'), 18, 'رصيد العملات لا يتغير');
+
+    const saved = JSON.parse(local.getItem(PROGRESS_KEY));
+    assert.deepEqual(saved.legacyUnassignedProgress.completedLessons, [1, 2, 3]);
+    assert.deepEqual(saved.legacyUnassignedProgress.quizPassedLessons, [1, 2]);
+    assert.equal(Object.prototype.hasOwnProperty.call(saved.lessonProgressBySkill, marker), false);
+
+    g("wizardSelections = { goal: 'x', skill: 'project', level: 'beginner', style: 'x' }; submitAssessment();");
+    assert.deepEqual(Array.from(g('userProgress.completedLessons')), [], 'تبديل المسار لا يستعيد بيانات العلامة المجهولة');
+    assert.deepEqual(Array.from(g('userProgress.quizPassedLessons')), []);
+    assert.equal(g('userProgress.skillCoins'), 18);
+  });
+}
+
+test('lessonProgressBySkill يقبل المفاتيح الخاصة كبيانات عادية دون تغيير prototype', () => {
+  const snapshots = JSON.parse('{"__proto__":{"completedLessons":[7],"quizPassedLessons":[7]},"constructor":{"completedLessons":[6],"quizPassedLessons":[6]},"toString":{"completedLessons":[5],"quizPassedLessons":[5]}}');
+  const local = rawStorage({
+    skillcompass_profile: BASE_PROFILE,
+    skillcompass_progress: {
+      completedLessons: [1],
+      quizPassedLessons: [1],
+      skillCoins: 12,
+      progressSkill: 'ecommerce',
+      lessonProgressBySkill: snapshots,
+    },
+  });
+  const { g } = loadPage({ local });
+
+  assert.equal(g('Object.getPrototypeOf(userProgress.lessonProgressBySkill) === null'), true);
+  assert.equal(g('Object.prototype.hasOwnProperty.call(userProgress.lessonProgressBySkill, "__proto__")'), true);
+  assert.equal(g('Object.prototype.hasOwnProperty.call(userProgress.lessonProgressBySkill, "constructor")'), true);
+  assert.equal(g('Object.prototype.hasOwnProperty.call(userProgress.lessonProgressBySkill, "toString")'), true);
+
+  g("wizardSelections = { goal: 'x', skill: 'marketing', level: 'beginner', style: 'x' }; submitAssessment();");
+  const saved = JSON.parse(local.getItem(PROGRESS_KEY));
+  assert.deepEqual(saved.lessonProgressBySkill.__proto__.quizPassedLessons, [7]);
+  assert.deepEqual(saved.lessonProgressBySkill.constructor.quizPassedLessons, [6]);
+  assert.deepEqual(saved.lessonProgressBySkill.toString.quizPassedLessons, [5]);
+  assert.equal(saved.progressSkill, 'marketing');
+  assert.deepEqual(Array.from(g('userProgress.quizPassedLessons')), []);
+});
+
 test('التقدم القديم غير المنسوب لا ينتقل إلى مهارة جديدة عند تبديل المسار', () => {
   const local = seedStorage({
     profile: { name: 'سارة', email: 'sara@example.com', skill: 'marketing', level: 'beginner' },
