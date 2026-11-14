@@ -1457,6 +1457,12 @@ function render(){
 // =====================
 // STATE MANAGEMENT
 // =====================
+// لا نقبل علامة تقدم إلا إذا كانت واحدة من مسارات المنصة المعروفة.
+const VALID_PROGRESS_SKILLS = new Set(['ecommerce', 'marketing', 'project', 'finance']);
+function isValidProgressSkill(value) {
+  return typeof value === 'string' && VALID_PROGRESS_SKILLS.has(value);
+}
+
 const USER_PROGRESS_DEFAULTS = {
   completedLessons: [],
   quizPassedLessons: [],
@@ -1474,28 +1480,18 @@ let userProgress = { ...USER_PROGRESS_DEFAULTS, ...savedUserProgress };
 userProgress.completedLessons = toLessonIdList(userProgress.completedLessons);
 userProgress.quizPassedLessons = toLessonIdList(userProgress.quizPassedLessons);
 userProgress.lessonProgressBySkill = normalizeSkillSnapshots(userProgress.lessonProgressBySkill);
-// التقدم القديم الذي لا يحمل progressSkill قد يكون خليطاً من عدة مهارات.
-// نحفظه دون منحه تلقائياً لأي مهارة؛ أرقام الدروس وحدها لا تكفي لإثبات مصدرها.
+// علامة التقدم لا تُوثق إلا بمعرّف مهارة معروف؛ القيم المجهولة (بما فيها مفاتيح الكائنات المحجوزة) تُعزل.
 let legacyProgressQuarantined = false;
-if (typeof savedUserProgress.progressSkill !== 'string' || savedUserProgress.progressSkill.trim() === '') {
-  const legacyCompleted = toLessonIdList(userProgress.completedLessons);
-  const legacyPassed = toLessonIdList(userProgress.quizPassedLessons);
-  if (legacyCompleted.length || legacyPassed.length) {
-    const previousLegacy = isPlainObject(userProgress.legacyUnassignedProgress)
-      ? userProgress.legacyUnassignedProgress
-      : {};
-    userProgress.legacyUnassignedProgress = {
-      completedLessons: [...new Set([...toLessonIdList(previousLegacy.completedLessons), ...legacyCompleted])],
-      quizPassedLessons: [...new Set([...toLessonIdList(previousLegacy.quizPassedLessons), ...legacyPassed])],
-      reason: 'legacy_progress_without_skill_marker'
-    };
-    userProgress.completedLessons = [];
-    userProgress.quizPassedLessons = [];
-    userProgress.progressSkill = typeof userProfile.skill === 'string' && userProfile.skill ? userProfile.skill : null;
-    legacyProgressQuarantined = true;
-  }
+let progressMarkerNormalized = false;
+if (!isValidProgressSkill(savedUserProgress.progressSkill)) {
+  legacyProgressQuarantined = quarantineUnassignedLessonProgress(
+    userProgress.completedLessons,
+    userProgress.quizPassedLessons
+  );
+  userProgress.progressSkill = isValidProgressSkill(userProfile.skill) ? userProfile.skill : null;
+  progressMarkerNormalized = true;
 }
-if (syncLessonProgressToSkill(userProfile.skill) || legacyProgressQuarantined) {
+if (syncLessonProgressToSkill(userProfile.skill) || legacyProgressQuarantined || progressMarkerNormalized) {
   safeSetItem('skillcompass_progress', userProgress);
 }
 let currentLessonIndex = 0;
@@ -3938,9 +3934,8 @@ function prevStep(step) {
 // ── تقدم الدروس مرتبط بالمهارة ──
 // معرّفات الدروس (1..8) تتكرر بين المهارات، فلا يُعتبر اجتياز درس في مهارة اجتيازاً لآخر.
 // completedLessons/quizPassedLessons تمثل المهارة النشطة فقط، ولقطة كل مهارة أخرى في lessonProgressBySkill.
-// ترحيل الملف القديم: المصفوفات الموجودة قبل هذا التغيير (والمختلطة بين المهارات إن وُجدت) تُنسب إلى
-// المهارة الحالية للملف عند أول تحميل. هذا قيد معلن: لا يمكن فصل تقدم قديم اختلط قبل هذا الإصلاح.
-// لا يُحذف أي تقدم صالح، ولا يُنسب تقدم مهارة إلى أخرى إلا بهذا الترحيل المعلن.
+// أي علامة مفقودة أو غير معروفة تُعامل كتقدم غير منسوب وتُنقل إلى legacyUnassignedProgress؛
+// لا ننسب هذه البيانات تلقائياً إلى المسار الحالي لأن أرقام الدروس وحدها لا تثبت مصدرها.
 
 function isPlainObject(v) {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -3961,32 +3956,52 @@ function isValidSnapshot(snapshot) {
   return isPlainObject(snapshot) && Array.isArray(snapshot.completedLessons) && Array.isArray(snapshot.quizPassedLessons);
 }
 
-// خريطة اللقطات: أي نوع غير كائن يصبح كائناً فارغاً. الإدخالات الموجودة تبقى كما هي.
+// خريطة اللقطات بلا prototype حتى لا تتحول مفاتيح مثل __proto__ إلى setters أو خصائص موروثة.
 function normalizeSkillSnapshots(v) {
-  return isPlainObject(v) ? { ...v } : {};
+  return isPlainObject(v) ? Object.assign(Object.create(null), v) : Object.create(null);
+}
+
+// يحفظ التقدم الذي لا يمكن إثبات انتمائه إلى مهارة دون منحه للمسار الحالي.
+function quarantineUnassignedLessonProgress(completed, passed) {
+  const legacyCompleted = toLessonIdList(completed);
+  const legacyPassed = toLessonIdList(passed);
+  if (!legacyCompleted.length && !legacyPassed.length) return false;
+
+  const previousLegacy = isPlainObject(userProgress.legacyUnassignedProgress)
+    ? userProgress.legacyUnassignedProgress
+    : {};
+  userProgress.legacyUnassignedProgress = {
+    completedLessons: [...new Set([...toLessonIdList(previousLegacy.completedLessons), ...legacyCompleted])],
+    quizPassedLessons: [...new Set([...toLessonIdList(previousLegacy.quizPassedLessons), ...legacyPassed])],
+    reason: 'legacy_progress_without_skill_marker'
+  };
+  userProgress.completedLessons = [];
+  userProgress.quizPassedLessons = [];
+  return true;
 }
 
 // يُرجع true إذا تغيّر شيء ويجب حفظه. لا يلمس skillCoins ولا أي حقل آخر.
 function syncLessonProgressToSkill(newSkill) {
-  if (typeof newSkill !== 'string' || newSkill === '') return false;
+  if (!isValidProgressSkill(newSkill)) return false;
   const before = JSON.stringify(userProgress);
   userProgress.completedLessons = toLessonIdList(userProgress.completedLessons);
   userProgress.quizPassedLessons = toLessonIdList(userProgress.quizPassedLessons);
   const bySkill = normalizeSkillSnapshots(userProgress.lessonProgressBySkill);
-  const active = typeof userProgress.progressSkill === 'string' && userProgress.progressSkill !== ''
+  const active = isValidProgressSkill(userProgress.progressSkill)
     ? userProgress.progressSkill
     : null;
 
   if (!active) {
-    // أي تقدم قديم بلا علامة مهارة يكون قد نُقل إلى legacyUnassignedProgress عند بدء الصفحة.
+    // لا ننسب بيانات ذات علامة مفقودة أو غير معروفة إلى المسار الجديد.
+    quarantineUnassignedLessonProgress(userProgress.completedLessons, userProgress.quizPassedLessons);
     userProgress.progressSkill = newSkill;
   } else if (active !== newSkill) {
-    // احفظ تقدم المهارة النشطة ثم استعد تقدم المهارة الجديدة إن كانت لقطتها صالحة
+    // احفظ تقدم المهارة النشطة ثم استعد تقدم المهارة الجديدة إن كانت لقطتها صالحة.
     bySkill[active] = {
       completedLessons: [...userProgress.completedLessons],
       quizPassedLessons: [...userProgress.quizPassedLessons],
     };
-    const stored = bySkill[newSkill];
+    const stored = Object.prototype.hasOwnProperty.call(bySkill, newSkill) ? bySkill[newSkill] : null;
     if (isValidSnapshot(stored)) {
       userProgress.completedLessons = toLessonIdList(stored.completedLessons);
       userProgress.quizPassedLessons = toLessonIdList(stored.quizPassedLessons);
