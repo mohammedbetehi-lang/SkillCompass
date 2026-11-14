@@ -1,1 +1,3 @@
 node_modules/
+qa-symlink-*/
+qa-symlink-ok-*/

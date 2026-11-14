@@ -156,6 +156,29 @@ test('بعد التسجيل: لا كلمة مرور ولا Hash في localStorag
   assert.equal(JSON.stringify(logs).includes(RAW_PASSWORD), false);
 });
 
+test('إعادة التسجيل أو تحديث الملف لا تصفر العملات ولا تقدم الدروس أو بيانات المحاكاة', () => {
+  const progress = {
+    completedLessons: [1, 2, 3], quizPassedLessons: [1, 2], skillCoins: 40,
+    lastQuizResult: { score: 8 }, progressSkill: 'marketing',
+    lessonProgressBySkill: { ecommerce: { completedLessons: [7], quizPassedLessons: [7] } },
+    simulationUnlocked: { marketing: true },
+  };
+  const local = seedStorage({ profile: { ...MARKETING_PROFILE, password: RAW_PASSWORD }, progress });
+  const before = local.getItem(PROGRESS_KEY);
+  const { g, getEl } = loadPage({ local });
+  getEl('reg-name').value = 'سارة الجديدة';
+  getEl('reg-email').value = 'sara.new@example.com';
+  g('handleRegistration()');
+  const savedProfile = JSON.parse(local.getItem(PROFILE_KEY));
+  assert.equal(savedProfile.name, 'سارة الجديدة');
+  assert.equal(savedProfile.email, 'sara.new@example.com');
+  assert.equal(Object.prototype.hasOwnProperty.call(savedProfile, 'password'), false);
+  assert.equal(local.getItem(PROGRESS_KEY), before, 'مفتاح التقدم يجب ألا يتغير بسبب تحديث الملف');
+  assert.equal(g('userProgress.skillCoins'), 40);
+  assert.deepEqual(Array.from(g('userProgress.completedLessons')), [1, 2, 3]);
+  assert.deepEqual(Array.from(g('userProgress.quizPassedLessons')), [1, 2]);
+});
+
 test('التسجيل لا يقبل الاسم بدون بريد ولا يحفظ شيئاً، ولا يطلب كلمة مرور', () => {
   const { g, getEl, local } = loadPage({ local: seedStorage() });
   getEl('reg-name').value = 'سارة';
@@ -165,7 +188,7 @@ test('التسجيل لا يقبل الاسم بدون بريد ولا يحفظ 
   assert.equal(getEl('reg-error').textContent, 'جميع الحقول مطلوبة');
 });
 
-test('migration عند تحميل الصفحة تحذف password القديمة وتُبقي الاسم والبريد والتقدم وSkillCoins', () => {
+test('migration عند تحميل الصفحة تحذف password وتحفظ التقدم القديم غير المنسوب دون منحه لمهارة تلقائياً', () => {
   const progress = { completedLessons: [1, 2], quizPassedLessons: [1], skillCoins: 35, lastQuizResult: null };
   const local = seedStorage({
     profile: { ...MARKETING_PROFILE, password: RAW_PASSWORD },
@@ -179,14 +202,19 @@ test('migration عند تحميل الصفحة تحذف password القديمة 
   assert.equal(after.name, 'سارة');
   assert.equal(after.email, 'sara@example.com');
   assert.equal(after.skill, 'marketing');
-  // التقدم لم يُفقد: الحقول الأصلية كما هي، والمهارة تُضاف فقط (progressSkill)
+  // التقدم محفوظ في منطقة غير منسوبة؛ لا نحتسبه تلقائياً لمهارة قد تكون خاطئة.
   const progAfter = JSON.parse(local.getItem(PROGRESS_KEY));
   assert.equal(progressBefore === null, false);
-  assert.deepEqual(progAfter.completedLessons, [1, 2]);
-  assert.deepEqual(progAfter.quizPassedLessons, [1]);
+  assert.deepEqual(progAfter.completedLessons, []);
+  assert.deepEqual(progAfter.quizPassedLessons, []);
+  assert.deepEqual(progAfter.legacyUnassignedProgress.completedLessons, [1, 2]);
+  assert.deepEqual(progAfter.legacyUnassignedProgress.quizPassedLessons, [1]);
+  assert.equal(progAfter.legacyUnassignedProgress.reason, 'legacy_progress_without_skill_marker');
+  assert.equal(progAfter.progressSkill, 'marketing');
   assert.equal(progAfter.skillCoins, 35);
   assert.equal(g('userProgress.skillCoins'), 35);
-  assert.deepEqual(Array.from(g('userProgress.completedLessons')), [1, 2]);
+  assert.deepEqual(Array.from(g('userProgress.completedLessons')), []);
+  assert.deepEqual(Array.from(g('userProgress.legacyUnassignedProgress.completedLessons')), [1, 2]);
   assert.equal(JSON.stringify(logs).includes(RAW_PASSWORD), false);
 });
 
@@ -460,7 +488,7 @@ test('تغيير المسار مع الاحتفاظ بالتقدم: اجتياز
   assert.deepEqual(Array.from(g('userProgress.quizPassedLessons')), ecomIds, 'تقدم التجارة يعود كما كان');
 });
 
-test('ملف قديم بلا progressSkill: ينسب تقدمه إلى المهارة الحالية دون فقدان', () => {
+test('ملف قديم بلا progressSkill: يحفظ التقدم غير المنسوب ولا يمنحه تلقائياً للمهارة الحالية', () => {
   const ids = [1, 2, 3];
   const local = seedStorage({
     profile: { name: 'سارة', email: 'sara@example.com', skill: 'marketing', level: 'beginner' },
@@ -468,9 +496,27 @@ test('ملف قديم بلا progressSkill: ينسب تقدمه إلى المه�
   });
   const { g } = loadPage({ local });
   assert.equal(g('userProgress.progressSkill'), 'marketing');
-  assert.deepEqual(Array.from(g('userProgress.quizPassedLessons')), [1]);
+  assert.deepEqual(Array.from(g('userProgress.completedLessons')), []);
+  assert.deepEqual(Array.from(g('userProgress.quizPassedLessons')), []);
+  assert.deepEqual(Array.from(g('userProgress.legacyUnassignedProgress.completedLessons')), ids);
+  assert.deepEqual(Array.from(g('userProgress.legacyUnassignedProgress.quizPassedLessons')), [1]);
   assert.equal(g('userProgress.skillCoins'), 35);
-  assert.equal(JSON.parse(local.getItem(PROGRESS_KEY)).progressSkill, 'marketing');
+  const saved = JSON.parse(local.getItem(PROGRESS_KEY));
+  assert.equal(saved.progressSkill, 'marketing');
+  assert.deepEqual(saved.legacyUnassignedProgress.completedLessons, ids);
+});
+
+test('التقدم القديم غير المنسوب لا ينتقل إلى مهارة جديدة عند تبديل المسار', () => {
+  const local = seedStorage({
+    profile: { name: 'سارة', email: 'sara@example.com', skill: 'marketing', level: 'beginner' },
+    progress: { completedLessons: [1, 2, 3], quizPassedLessons: [1], skillCoins: 35 },
+  });
+  const { g } = loadPage({ local });
+  g("wizardSelections = { goal: 'x', skill: 'ecommerce', level: 'beginner', style: 'x' }; submitAssessment();");
+  assert.deepEqual(Array.from(g('userProgress.completedLessons')), []);
+  assert.deepEqual(Array.from(g('userProgress.quizPassedLessons')), []);
+  assert.deepEqual(Array.from(g('userProgress.legacyUnassignedProgress.completedLessons')), [1, 2, 3]);
+  assert.equal(g('userProgress.skillCoins'), 35);
 });
 
 // ───────── بيانات تقدم تالفة أو ناقصة: لا تعطّل التحميل، ولا تفقد skillCoins ─────────

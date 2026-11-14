@@ -1474,7 +1474,30 @@ let userProgress = { ...USER_PROGRESS_DEFAULTS, ...savedUserProgress };
 userProgress.completedLessons = toLessonIdList(userProgress.completedLessons);
 userProgress.quizPassedLessons = toLessonIdList(userProgress.quizPassedLessons);
 userProgress.lessonProgressBySkill = normalizeSkillSnapshots(userProgress.lessonProgressBySkill);
-if (syncLessonProgressToSkill(userProfile.skill)) safeSetItem('skillcompass_progress', userProgress);
+// التقدم القديم الذي لا يحمل progressSkill قد يكون خليطاً من عدة مهارات.
+// نحفظه دون منحه تلقائياً لأي مهارة؛ أرقام الدروس وحدها لا تكفي لإثبات مصدرها.
+let legacyProgressQuarantined = false;
+if (!Object.prototype.hasOwnProperty.call(savedUserProgress, 'progressSkill')) {
+  const legacyCompleted = toLessonIdList(userProgress.completedLessons);
+  const legacyPassed = toLessonIdList(userProgress.quizPassedLessons);
+  if (legacyCompleted.length || legacyPassed.length) {
+    const previousLegacy = isPlainObject(userProgress.legacyUnassignedProgress)
+      ? userProgress.legacyUnassignedProgress
+      : {};
+    userProgress.legacyUnassignedProgress = {
+      completedLessons: [...new Set([...toLessonIdList(previousLegacy.completedLessons), ...legacyCompleted])],
+      quizPassedLessons: [...new Set([...toLessonIdList(previousLegacy.quizPassedLessons), ...legacyPassed])],
+      reason: 'legacy_progress_without_skill_marker'
+    };
+    userProgress.completedLessons = [];
+    userProgress.quizPassedLessons = [];
+    userProgress.progressSkill = typeof userProfile.skill === 'string' && userProfile.skill ? userProfile.skill : null;
+    legacyProgressQuarantined = true;
+  }
+}
+if (syncLessonProgressToSkill(userProfile.skill) || legacyProgressQuarantined) {
+  safeSetItem('skillcompass_progress', userProgress);
+}
 let currentLessonIndex = 0;
 let currentStep = 1;
 let wizardSelections = {};
@@ -3955,7 +3978,7 @@ function syncLessonProgressToSkill(newSkill) {
     : null;
 
   if (!active) {
-    // ملف قديم أو بلا مهارة مسجلة: المصفوفات الحالية تُنسب إلى المهارة الحالية
+    // أي تقدم قديم بلا علامة مهارة يكون قد نُقل إلى legacyUnassignedProgress عند بدء الصفحة.
     userProgress.progressSkill = newSkill;
   } else if (active !== newSkill) {
     // احفظ تقدم المهارة النشطة ثم استعد تقدم المهارة الجديدة إن كانت لقطتها صالحة
@@ -4044,8 +4067,11 @@ function handleRegistration() {
   userProfile = { ...profileWithoutPassword, name, email };
   safeSetItem('skillcompass_profile', userProfile);
 
-  userProgress = { completedLessons: [], quizPassedLessons: [], skillCoins: 0, lastQuizResult: null, progressSkill: userProfile.skill || null, lessonProgressBySkill: {} };
-  safeSetItem('skillcompass_progress', userProgress);
+  // تحديث بيانات الملف لا يعني إنشاء مستخدم جديد: لا تمسح العملات أو تقدم الدروس أو بيانات المحاكاة.
+  // أنشئ حالة افتراضية فقط عندما لا يوجد مفتاح تقدم سابق.
+  if (safeGetItem('skillcompass_progress', null) === null) {
+    safeSetItem('skillcompass_progress', userProgress);
+  }
 
   navigateTo('page5');
 }
