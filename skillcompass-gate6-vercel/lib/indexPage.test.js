@@ -507,6 +507,20 @@ test('ملف قديم بلا progressSkill: يحفظ التقدم غير الم�
   assert.deepEqual(saved.legacyUnassignedProgress.completedLessons, ids);
 });
 
+test('progressSkill فارغ أو null لا يجعل تقدم legacy موثوق الإسناد', () => {
+  for (const marker of [null, '']) {
+    const local = rawStorage({
+      skillcompass_profile: { ...BASE_PROFILE, skill: 'marketing' },
+      skillcompass_progress: { completedLessons: [1, 2], quizPassedLessons: [1], skillCoins: 18, progressSkill: marker },
+    });
+    const { g } = loadPage({ local });
+    assert.deepEqual(Array.from(g('userProgress.completedLessons')), []);
+    assert.deepEqual(Array.from(g('userProgress.quizPassedLessons')), []);
+    assert.deepEqual(Array.from(g('userProgress.legacyUnassignedProgress.completedLessons')), [1, 2]);
+    assert.equal(g('userProgress.skillCoins'), 18);
+  }
+});
+
 test('التقدم القديم غير المنسوب لا ينتقل إلى مهارة جديدة عند تبديل المسار', () => {
   const local = seedStorage({
     profile: { name: 'سارة', email: 'sara@example.com', skill: 'marketing', level: 'beginner' },

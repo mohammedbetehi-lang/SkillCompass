@@ -1477,7 +1477,7 @@ userProgress.lessonProgressBySkill = normalizeSkillSnapshots(userProgress.lesson
 // التقدم القديم الذي لا يحمل progressSkill قد يكون خليطاً من عدة مهارات.
 // نحفظه دون منحه تلقائياً لأي مهارة؛ أرقام الدروس وحدها لا تكفي لإثبات مصدرها.
 let legacyProgressQuarantined = false;
-if (!Object.prototype.hasOwnProperty.call(savedUserProgress, 'progressSkill')) {
+if (typeof savedUserProgress.progressSkill !== 'string' || savedUserProgress.progressSkill.trim() === '') {
   const legacyCompleted = toLessonIdList(userProgress.completedLessons);
   const legacyPassed = toLessonIdList(userProgress.quizPassedLessons);
   if (legacyCompleted.length || legacyPassed.length) {
