@@ -3,6 +3,13 @@
   "version": "1.0.0",
   "private": true,
   "engines": {
-    "node": ">=18"
+    "node": "26.x"
+  },
+  "scripts": {
+    "test:e2e:qa": "node --test e2e/qa-browser.test.cjs",
+    "qa:install-browser": "npx playwright install chromium"
+  },
+  "devDependencies": {
+    "playwright": "1.63.0"
   }
 }
