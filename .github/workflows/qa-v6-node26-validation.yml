@@ -2,7 +2,9 @@ name: QA V6 Node 26 Validation
 
 on:
   push:
-    branches: [qa/v6-node26-validation]
+    branches:
+      - qa/v6-node26-validation
+      - fix/qa-v6-review-followups
   workflow_dispatch:
 
 permissions:
@@ -22,11 +24,12 @@ jobs:
         run: |
           node --version
           npm --version
-      - name: Generate package-lock.json using npm and the public registry
+      - name: Install from the committed lockfile
+        working-directory: skillcompass-gate6-vercel
+        run: npm ci
+      - name: Verify committed lockfile reproducibility
         working-directory: skillcompass-gate6-vercel
         run: |
-          rm -f package-lock.json
-          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
           node <<'NODE'
           const pkg = require('./package.json');
           const lock = require('./package-lock.json');
@@ -40,9 +43,8 @@ jobs:
             if (!entry.integrity?.startsWith('sha512-')) throw new Error(name + ' requires sha512 integrity');
           }
           NODE
-      - name: Install from generated lockfile
-        working-directory: skillcompass-gate6-vercel
-        run: npm ci
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          git diff --exit-code -- package-lock.json
       - name: Install Chromium
         working-directory: skillcompass-gate6-vercel
         run: npx playwright install --with-deps chromium
@@ -57,6 +59,12 @@ jobs:
       - name: Run browser QA on Chromium
         working-directory: skillcompass-gate6-vercel
         run: npm run test:e2e:qa
+      - name: Smoke-test AI Teacher Preview API
+        working-directory: skillcompass-gate6-vercel
+        env:
+          AI_TEACHER_PREVIEW_URL: https://skillcompass-skillcompass-gate6-git-6bb482-betehimohammed-9229.vercel.app
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: node e2e/preview-api-smoke.cjs
       - name: Verify production-only install excludes Playwright
         working-directory: skillcompass-gate6-vercel
         run: |

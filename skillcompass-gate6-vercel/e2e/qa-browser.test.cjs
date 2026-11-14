@@ -1,5 +1,5 @@
 'use strict';
-// اختبارات متصفح حقيقية (Chromium عبر Playwright) — تُشغَّل محلياً فقط، وليست ضمن CI:
+// اختبارات متصفح حقيقية (Chromium عبر Playwright) — تعمل محلياً وفي QA V6 CI:
 //   node --test e2e/qa-browser.test.cjs
 // تخدم الملفات من خادم محلي على 127.0.0.1، وتُحجب كل الطلبات الخارجية (لا شبكة ولا مفاتيح).
 const test = require('node:test');
@@ -10,11 +10,15 @@ const path = require('node:path');
 const os = require('node:os');
 const { chromium } = require('playwright');
 
-// يحدد هل المسار (بعد الحل الحقيقي) داخل جذر المشروع الحقيقي
+// يفحص الاحتواء بمقارنة حدود المجلد، لا بمجرد startsWith الذي يرفض أسماء داخلية مثل "..cache".
+function isPathInside(basePath, targetPath) {
+  const rel = path.relative(basePath, targetPath);
+  return rel !== '' && rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel);
+}
+
+// يحدد هل الوجهة الحقيقية (بعد حل الروابط الرمزية) داخل جذر المشروع الحقيقي.
 function isInsideRoot(p) {
-  const base = fs.realpathSync(ROOT);
-  const rel = path.relative(base, p);
-  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+  return isPathInside(fs.realpathSync(ROOT), p);
 }
 
 // طلب خام إلى الخادم المحلي (المسار كما هو بلا تطبيع) ويعيد الحالة والمحتوى
@@ -46,10 +50,6 @@ const getBrowser = () => (browserP ||= chromium.launch());
 test.before(async () => {
   // جذر المشروع الحقيقي (بعد حل أي روابط رمزية في مسار المشروع نفسه)
   const ROOT_REAL = fs.realpathSync(ROOT);
-  const isInside = (base, target) => {
-    const rel = path.relative(base, target);
-    return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
-  };
   server = http.createServer((req, res) => {
     const notFound = () => { res.writeHead(404); res.end('not found'); };
     // المسار الخام بدون تطبيع URL (حتى لا تختفي محاولات ../)، ثم فك الترميز
@@ -61,7 +61,7 @@ test.before(async () => {
     }
     // (1) تحقق نصي: المسار المنطقي يجب أن يقع داخل ROOT
     const file = path.resolve(ROOT, urlPath === '/' ? 'index.html' : '.' + urlPath);
-    if (!isInside(ROOT, file)) return notFound();
+    if (!isPathInside(ROOT, file)) return notFound();
     if (!fs.existsSync(file)) return notFound();
     // (2) تحقق الوجهة الحقيقية: الروابط الرمزية تُحل هنا، ويجب أن تبقى الوجهة داخل جذر المشروع الحقيقي
     let real;
@@ -70,7 +70,7 @@ test.before(async () => {
     } catch {
       return notFound();
     }
-    if (!isInside(ROOT_REAL, real)) return notFound();
+    if (!isPathInside(ROOT_REAL, real)) return notFound();
     if (fs.statSync(real).isDirectory()) return notFound();
     res.writeHead(200, { 'content-type': TYPES[path.extname(real)] || 'application/octet-stream' });
     fs.createReadStream(real).pipe(res);
@@ -90,14 +90,17 @@ async function openPage(vp) {
   const browser = await getBrowser();
   const context = await browser.newContext({ viewport: { width: vp.width, height: vp.height }, locale: 'ar' });
   const page = await context.newPage();
-  const report = { consoleIssues: [], pageErrors: [], localFailures: [], blockedExternal: [], allConsole: [] };
+  const report = { consoleIssues: [], externalConsoleIssues: [], pageErrors: [], localFailures: [], blockedExternal: [], allConsole: [] };
   page.on('console', (msg) => {
     const text = msg.text();
     report.allConsole.push(`${msg.type()}: ${text}`);
     if (msg.type() === 'error' || msg.type() === 'warning') {
       const loc = msg.location().url || '';
-      if (loc && !loc.startsWith(base)) report.blockedExternal.push(text);
-      else report.consoleIssues.push(`${msg.type()}: ${text}`);
+      if (loc && !loc.startsWith(base)) {
+        report.externalConsoleIssues.push({ url: loc, type: msg.type(), message: text });
+      } else {
+        report.consoleIssues.push(`${msg.type()}: ${text}`);
+      }
     }
   });
   page.on('pageerror', (err) => report.pageErrors.push(String(err && err.message)));
@@ -110,7 +113,7 @@ async function openPage(vp) {
   await page.route('**/*', (route) => {
     const url = route.request().url();
     if (url.startsWith(base)) return route.continue();
-    report.blockedExternal.push(`blocked ${url}`);
+    report.blockedExternal.push(url);
     return route.abort();
   });
   await page.goto(base + '/index.html', { waitUntil: 'load' });
@@ -129,10 +132,27 @@ async function seedAndReload(page, items) {
 
 const noOverflow = (page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
 const shot = (page, name) => (SHOTS ? page.screenshot({ path: path.join(SHOTS, `${name}.png`), scale: 'device' }) : null);
+const ALLOWED_BLOCKED_EXTERNAL_HOSTS = new Set(['fonts.googleapis.com', 'images.unsplash.com']);
+
+function assertExternalRequestsAllowed(report) {
+  const unexpectedRequests = report.blockedExternal.filter((raw) => {
+    try { return !ALLOWED_BLOCKED_EXTERNAL_HOSTS.has(new URL(raw).hostname); }
+    catch { return true; }
+  });
+  assert.deepEqual(unexpectedRequests, [], 'unexpected blocked external request host');
+
+  const unexpectedConsole = report.externalConsoleIssues.filter((issue) => {
+    try { return !ALLOWED_BLOCKED_EXTERNAL_HOSTS.has(new URL(issue.url).hostname); }
+    catch { return true; }
+  });
+  assert.deepEqual(unexpectedConsole, [], 'unexpected external console issue host');
+}
+
 const expectClean = (report) => {
   assert.deepEqual(report.pageErrors, [], 'pageerror');
   assert.deepEqual(report.consoleIssues, [], 'console errors/warnings');
   assert.deepEqual(report.localFailures, [], 'local file load failures');
+  assertExternalRequestsAllowed(report);
 };
 const mktIds = (page) => page.evaluate(() => SKILL_DATABASE.marketing.lessons.map((l) => l.id));
 
@@ -173,6 +193,41 @@ for (const vp of VIEWPORTS) {
     }
   });
 
+  test(`[${vp.name}] تحديث الملف المحلي لا يصفر التقدم أو SkillCoins`, async () => {
+    const { context, page, report } = await openPage(vp);
+    try {
+      const progress = {
+        completedLessons: [2, 4], quizPassedLessons: [2], skillCoins: 40,
+        lastQuizResult: { score: 8 }, progressSkill: 'marketing',
+        lessonProgressBySkill: { ecommerce: { completedLessons: [7], quizPassedLessons: [7] } },
+        simulationUnlocked: { marketing: true },
+      };
+      await seedAndReload(page, {
+        skillcompass_profile: { name: 'سارة', email: 'sara@example.com', skill: 'marketing', level: 'beginner', password: RAW_PASSWORD },
+        skillcompass_progress: progress,
+      });
+      await page.evaluate(() => navigateTo('page4'));
+      await page.fill('#reg-name', 'سارة الجديدة');
+      await page.fill('#reg-email', 'sara.new@example.com');
+      await page.click('text=إنشاء الملف المحلي');
+      await page.waitForSelector('#page5.active', { state: 'visible' });
+
+      const saved = await page.evaluate(() => ({
+        profile: JSON.parse(localStorage.getItem('skillcompass_profile')),
+        progress: JSON.parse(localStorage.getItem('skillcompass_progress')),
+        coins: userProgress.skillCoins,
+      }));
+      assert.equal(saved.profile.name, 'سارة الجديدة');
+      assert.equal(saved.profile.email, 'sara.new@example.com');
+      assert.equal(Object.prototype.hasOwnProperty.call(saved.profile, 'password'), false);
+      assert.deepEqual(saved.progress, progress, 'تحديث الملف لا يغيّر أي حقل في التقدم');
+      assert.equal(saved.coins, 40);
+      expectClean(report);
+    } finally {
+      await context.close();
+    }
+  });
+
   test(`[${vp.name}] Migration لملف قديم يحتوي password مع الحفاظ على التقدم وSkillCoins`, async () => {
     const { context, page, report } = await openPage(vp);
     try {
@@ -186,17 +241,21 @@ for (const vp of VIEWPORTS) {
         progress: JSON.parse(localStorage.getItem('skillcompass_progress')),
         coins: userProgress.skillCoins,
         completed: userProgress.completedLessons,
+        legacyCompleted: userProgress.legacyUnassignedProgress.completedLessons,
+        legacyPassed: userProgress.legacyUnassignedProgress.quizPassedLessons,
         all: Object.values(Object.fromEntries(Object.keys(localStorage).map((k) => [k, localStorage.getItem(k)]))).join('\n'),
       }));
       assert.equal(Object.prototype.hasOwnProperty.call(r.profile, 'password'), false);
       assert.equal(r.profile.name, 'سارة');
       assert.equal(r.profile.email, 'sara@example.com');
       assert.equal(r.profile.skill, 'marketing');
-      assert.deepEqual(r.progress.completedLessons, [1, 2], 'التقدم لم يُفقد');
-      assert.deepEqual(r.progress.quizPassedLessons, [1]);
+      assert.deepEqual(r.progress.completedLessons, [], 'التقدم غير المنسوب لا يُمنح تلقائياً لمهارة');
+      assert.deepEqual(r.progress.quizPassedLessons, []);
+      assert.deepEqual(r.legacyCompleted, [1, 2], 'التقدم القديم محفوظ للاستعادة لاحقاً');
+      assert.deepEqual(r.legacyPassed, [1]);
       assert.equal(r.progress.skillCoins, 35);
       assert.equal(r.coins, 35);
-      assert.deepEqual(r.completed, [1, 2]);
+      assert.deepEqual(r.completed, []);
       assert.equal(r.all.includes(RAW_PASSWORD), false);
       assert.equal(report.allConsole.some((l) => l.includes(RAW_PASSWORD)), false);
       expectClean(report);
@@ -344,7 +403,7 @@ for (const vp of VIEWPORTS) {
       const ids = await mktIds(page);
       await seedAndReload(page, {
         skillcompass_profile: { name: 'سارة', email: 'sara@example.com', skill: 'marketing', level: 'beginner' },
-        skillcompass_progress: { completedLessons: ids, quizPassedLessons: ids, skillCoins: 0, lastQuizResult: null, simulationUnlocked: { marketing: true } },
+        skillcompass_progress: { completedLessons: ids, quizPassedLessons: ids, skillCoins: 0, lastQuizResult: null, progressSkill: 'marketing', simulationUnlocked: { marketing: true } },
       });
       await page.evaluate(() => { navigateTo('page10'); mktState.phase = 3; saveMktState(); renderMarketingSim(); });
       assert.equal(await page.locator('#mkt-go-lessons').isVisible(), false);
@@ -523,12 +582,13 @@ test('الروابط الرمزية داخل المشروع تبقى مسموح�
   }
 });
 
-test('تقرير: الطلبات الخارجية المحجوبة (لا تُحسب كخطأ للتطبيق)', async () => {
+test('الطلبات الخارجية المحجوبة تقتصر على النطاقات المسموح بها', async () => {
   const { context, page, report } = await openPage(VIEWPORTS[0]);
   try {
     await page.waitForTimeout(500);
-    console.log('blocked external requests/messages:', JSON.stringify([...new Set(report.blockedExternal)]));
-    assert.ok(true);
+    assertExternalRequestsAllowed(report);
+    console.log('allowed blocked external hosts:', JSON.stringify([...new Set(report.blockedExternal.map((raw) => new URL(raw).hostname))]));
+    expectClean(report);
   } finally {
     await context.close();
   }
