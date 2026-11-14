@@ -535,22 +535,20 @@ label { display: block; margin-bottom: 6px; color: var(--text-muted); font-weigh
 <div class="page-view" id="page4">
 <div class="container" style="max-width:450px">
 <div class="card">
-<h2 class="text-center mb-2">إنشاء حساب جديد</h2>
+<h2 class="text-center mb-2">إنشاء ملف تعليمي محلي</h2>
 <div id="register-form">
+<p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:12px">هذا ملف تعليمي محلي يُحفظ على هذا الجهاز فقط، وليس حساباً آمناً ولا نظام تسجيل دخول. لا نطلب كلمة مرور.</p>
 <label>الاسم الكامل</label>
 <input id="reg-name" placeholder="محمد أحمد" type="text"/>
 <label>البريد الإلكتروني</label>
 <input id="reg-email" placeholder="example@email.com" type="text"/>
-<label>كلمة المرور</label>
-<input id="reg-password" placeholder="8 أحرف على الأقل" type="password"/>
-<p style="font-size:0.8rem;color:var(--text-muted)">يجب أن تكون 8 أحرف على الأقل</p>
 <p class="error-msg" id="reg-error"></p>
-<button class="btn-primary mb-1" onclick="handleRegistration()" type="button">إنشاء الحساب</button>
+<button class="btn-primary mb-1" onclick="handleRegistration()" type="button">إنشاء الملف المحلي</button>
 </div>
 <div class="text-center" style="margin-top:16px">
 <p style="color:var(--text-muted);font-size:0.9rem">أو</p>
-<button class="btn-secondary w-full mt-2" onclick="googleLogin()">
-<span>🔍</span> التسجيل باستخدام Google
+<button class="btn-secondary w-full mt-2" type="button" disabled aria-disabled="true" style="opacity:0.55;cursor:not-allowed">
+<span>🔍</span> التسجيل باستخدام Google (غير متاح حالياً)
         </button>
 </div>
 </div>
@@ -905,22 +903,22 @@ label { display: block; margin-bottom: 6px; color: var(--text-muted); font-weigh
 <p style="color:var(--text-muted);margin-bottom:16px">وزّع ميزانيتك الحالية (رصيد SkillCoins) على منصات الإعلان</p>
 <div class="ad-platform">
 <span style="flex:1">📘 فيسبوك</span>
-<input id="mkt-ad-facebook" min="0" onchange="updateMktAdTotal()" type="number" value="0"/>
+<input id="mkt-ad-facebook" min="0" oninput="updateMktAdTotal()" type="number" value="0"/>
 <span>SkillCoins</span>
 </div>
 <div class="ad-platform">
 <span style="flex:1">📸 إنستقرام</span>
-<input id="mkt-ad-instagram" min="0" onchange="updateMktAdTotal()" type="number" value="0"/>
+<input id="mkt-ad-instagram" min="0" oninput="updateMktAdTotal()" type="number" value="0"/>
 <span>SkillCoins</span>
 </div>
 <div class="ad-platform">
 <span style="flex:1">🎵 تيك توك</span>
-<input id="mkt-ad-tiktok" min="0" onchange="updateMktAdTotal()" type="number" value="0"/>
+<input id="mkt-ad-tiktok" min="0" oninput="updateMktAdTotal()" type="number" value="0"/>
 <span>SkillCoins</span>
 </div>
 <div class="ad-platform">
 <span style="flex:1">🔍 جوجل (بحث)</span>
-<input id="mkt-ad-google" min="0" onchange="updateMktAdTotal()" type="number" value="0"/>
+<input id="mkt-ad-google" min="0" oninput="updateMktAdTotal()" type="number" value="0"/>
 <span>SkillCoins</span>
 </div>
 <div class="card mt-2" style="background:var(--bg-dark)">
@@ -933,8 +931,13 @@ label { display: block; margin-bottom: 6px; color: var(--text-muted); font-weigh
 <strong id="mkt-ad-balance">0 SkillCoins</strong>
 </div>
 </div>
-<p class="error-msg" id="mkt-error-budget">لا يمكن أن يتجاوز الإنفاق الميزانية المتاحة</p>
-<button class="btn-primary mt-2" onclick="confirmMktBudget()">تأكيد الميزانية</button>
+<div class="card mt-2" id="mkt-no-budget" style="display:none;background:var(--bg-dark)">
+<h4 id="mkt-no-budget-title">لا يمكن بدء الحملة: رصيدك 0 SkillCoins</h4>
+<p style="color:var(--text-muted);margin:8px 0" id="mkt-no-budget-text">تكسب SkillCoins من دروس التسويق. بعد إكمال درس واكتساب عملات حقيقية، عُد إلى هذه المرحلة لتوزيع الميزانية.</p>
+<button class="btn-primary mt-2" id="mkt-go-lessons" onclick="goToMarketingLessons()" type="button">📚 اذهب إلى دروس التسويق</button>
+</div>
+<p class="error-msg" id="mkt-error-budget">لا يمكن أن يتجاوز الإنفاق الرصيد المتاح من SkillCoins</p>
+<button class="btn-primary mt-2" id="mkt-confirm-budget" onclick="confirmMktBudget()">تأكيد الميزانية</button>
 </div>
 <!-- Phase 4: Ad Creative -->
 <div class="card" id="mkt-phase-4" style="display:none">
@@ -1450,7 +1453,7 @@ function render(){
  }
 
  window.SkillCompassFinance={newGame:newGame,allocate:allocate,advance:advance,phoneChoice:phoneChoice,payObligation:payObligation};
-})();</script><script>
+})();</script><script src="lib/localProfile.js"></script><script src="lib/marketingBudget.js"></script><script>
 // =====================
 // STATE MANAGEMENT
 // =====================
@@ -1460,11 +1463,18 @@ const USER_PROGRESS_DEFAULTS = {
   skillCoins: 0,
   lastQuizResult: null
 };
+// migration: حذف كلمة المرور القديمة إن وُجدت من الملف المحلي، مع إبقاء كل البيانات الأخرى
+try { if (window.LocalProfile) window.LocalProfile.migrateStoredProfile(localStorage); } catch (e) { /* التخزين غير متاح */ }
 let userProfile = safeGetJSON('skillcompass_profile', {});
+if (!isPlainObject(userProfile)) userProfile = {};
 let savedUserProgress = safeGetJSON('skillcompass_progress', {});
+if (!isPlainObject(savedUserProgress)) savedUserProgress = {};
 let userProgress = { ...USER_PROGRESS_DEFAULTS, ...savedUserProgress };
-if (!Array.isArray(userProgress.completedLessons)) userProgress.completedLessons = [];
-if (!Array.isArray(userProgress.quizPassedLessons)) userProgress.quizPassedLessons = [];
+// قيم القوائم تُتحقق قبل أي نسخ أو قراءة: null أو نص أو نوع خاطئ لا يُعطّل التحميل
+userProgress.completedLessons = toLessonIdList(userProgress.completedLessons);
+userProgress.quizPassedLessons = toLessonIdList(userProgress.quizPassedLessons);
+userProgress.lessonProgressBySkill = normalizeSkillSnapshots(userProgress.lessonProgressBySkill);
+if (syncLessonProgressToSkill(userProfile.skill)) safeSetItem('skillcompass_progress', userProgress);
 let currentLessonIndex = 0;
 let currentStep = 1;
 let wizardSelections = {};
@@ -3902,6 +3912,72 @@ function prevStep(step) {
   currentStep = step - 1;
 }
 
+// ── تقدم الدروس مرتبط بالمهارة ──
+// معرّفات الدروس (1..8) تتكرر بين المهارات، فلا يُعتبر اجتياز درس في مهارة اجتيازاً لآخر.
+// completedLessons/quizPassedLessons تمثل المهارة النشطة فقط، ولقطة كل مهارة أخرى في lessonProgressBySkill.
+// ترحيل الملف القديم: المصفوفات الموجودة قبل هذا التغيير (والمختلطة بين المهارات إن وُجدت) تُنسب إلى
+// المهارة الحالية للملف عند أول تحميل. هذا قيد معلن: لا يمكن فصل تقدم قديم اختلط قبل هذا الإصلاح.
+// لا يُحذف أي تقدم صالح، ولا يُنسب تقدم مهارة إلى أخرى إلا بهذا الترحيل المعلن.
+
+function isPlainObject(v) {
+  return v !== null && typeof v === 'object' && !Array.isArray(v);
+}
+
+// قائمة معرّفات دروس صالحة: أرقام منتهية فقط، بلا تكرار. أي قيمة غير مصفوفة تصبح قائمة فارغة.
+function toLessonIdList(v) {
+  if (!Array.isArray(v)) return [];
+  const out = [];
+  v.forEach((id) => {
+    if (typeof id === 'number' && Number.isFinite(id) && !out.includes(id)) out.push(id);
+  });
+  return out;
+}
+
+// لقطة المهارة صالحة فقط إذا كانت كائناً يحوي المصفوفتين. اللقطة غير الصالحة لا تُقرأ ولا تُحذف.
+function isValidSnapshot(snapshot) {
+  return isPlainObject(snapshot) && Array.isArray(snapshot.completedLessons) && Array.isArray(snapshot.quizPassedLessons);
+}
+
+// خريطة اللقطات: أي نوع غير كائن يصبح كائناً فارغاً. الإدخالات الموجودة تبقى كما هي.
+function normalizeSkillSnapshots(v) {
+  return isPlainObject(v) ? { ...v } : {};
+}
+
+// يُرجع true إذا تغيّر شيء ويجب حفظه. لا يلمس skillCoins ولا أي حقل آخر.
+function syncLessonProgressToSkill(newSkill) {
+  if (typeof newSkill !== 'string' || newSkill === '') return false;
+  const before = JSON.stringify(userProgress);
+  userProgress.completedLessons = toLessonIdList(userProgress.completedLessons);
+  userProgress.quizPassedLessons = toLessonIdList(userProgress.quizPassedLessons);
+  const bySkill = normalizeSkillSnapshots(userProgress.lessonProgressBySkill);
+  const active = typeof userProgress.progressSkill === 'string' && userProgress.progressSkill !== ''
+    ? userProgress.progressSkill
+    : null;
+
+  if (!active) {
+    // ملف قديم أو بلا مهارة مسجلة: المصفوفات الحالية تُنسب إلى المهارة الحالية
+    userProgress.progressSkill = newSkill;
+  } else if (active !== newSkill) {
+    // احفظ تقدم المهارة النشطة ثم استعد تقدم المهارة الجديدة إن كانت لقطتها صالحة
+    bySkill[active] = {
+      completedLessons: [...userProgress.completedLessons],
+      quizPassedLessons: [...userProgress.quizPassedLessons],
+    };
+    const stored = bySkill[newSkill];
+    if (isValidSnapshot(stored)) {
+      userProgress.completedLessons = toLessonIdList(stored.completedLessons);
+      userProgress.quizPassedLessons = toLessonIdList(stored.quizPassedLessons);
+      delete bySkill[newSkill];
+    } else {
+      userProgress.completedLessons = [];
+      userProgress.quizPassedLessons = [];
+    }
+    userProgress.progressSkill = newSkill;
+  }
+  userProgress.lessonProgressBySkill = bySkill;
+  return JSON.stringify(userProgress) !== before;
+}
+
 function submitAssessment() {
   if (!wizardSelections.style) {
     document.getElementById('error-step4').classList.add('show');
@@ -3916,6 +3992,7 @@ function submitAssessment() {
     email: userProfile.email || ''
   };
   safeSetItem('skillcompass_profile', userProfile);
+  if (syncLessonProgressToSkill(userProfile.skill)) safeSetItem('skillcompass_progress', userProgress);
   renderPathSummary();
   navigateTo('page3');
 }
@@ -3952,9 +4029,8 @@ function renderPathSummary() {
 function handleRegistration() {
   const name = document.getElementById('reg-name').value.trim();
   const email = document.getElementById('reg-email').value.trim();
-  const password = document.getElementById('reg-password').value;
 
-  if (!name || !email || !password) {
+  if (!name || !email) {
     showRegError('جميع الحقول مطلوبة');
     return;
   }
@@ -3962,18 +4038,13 @@ function handleRegistration() {
     showRegError('الرجاء إدخال بريد إلكتروني صحيح');
     return;
   }
-  if (password.length < 8) {
-    showRegError('كلمة المرور يجب أن تكون 8 أحرف على الأقل');
-    return;
-  }
 
-  userProfile.name = name;
-  userProfile.email = email;
-  // Note: In real app, hash password with bcrypt before storing
-  userProfile.password = password; // Placeholder for MVP
+  // ملف تعليمي محلي فقط: لا تُجمع كلمة مرور ولا تُخزَّن بأي شكل
+  const { password: _staleHash, ...profileWithoutPassword } = userProfile;
+  userProfile = { ...profileWithoutPassword, name, email };
   safeSetItem('skillcompass_profile', userProfile);
 
-  userProgress = { completedLessons: [], quizPassedLessons: [], skillCoins: 0, lastQuizResult: null };
+  userProgress = { completedLessons: [], quizPassedLessons: [], skillCoins: 0, lastQuizResult: null, progressSkill: userProfile.skill || null, lessonProgressBySkill: {} };
   safeSetItem('skillcompass_progress', userProgress);
 
   navigateTo('page5');
@@ -4826,6 +4897,14 @@ function renderMarketingSim() {
   document.getElementById('mkt-phase-nav').style.display = (mktState.phase <= 4) ? 'flex' : 'none';
 
   document.getElementById('mkt-budget').textContent = getMktAvailableBudget().toLocaleString();
+  // رصيد صفر في مرحلة الميزانية: رسالة واضحة وزر إلى دروس التسويق (لا تُعرض بعد تأكيد الميزانية)
+  const showNoBudget = mktState.phase === 3 && !mktState.budgetConfirmed && !(getMktAvailableBudget() > 0);
+  document.getElementById('mkt-no-budget').style.display = showNoBudget ? 'block' : 'none';
+  const allMktLessonsPassed = marketingLessonsRemaining() === 0;
+  document.getElementById('mkt-no-budget-text').textContent = allMktLessonsPassed
+    ? 'اجتزت جميع دروس التسويق، ولا توجد مكافآت دروس جديدة متاحة حالياً.'
+    : 'تكسب SkillCoins من دروس التسويق. بعد إكمال درس واكتساب عملات حقيقية، عُد إلى هذه المرحلة لتوزيع الميزانية.';
+  document.getElementById('mkt-go-lessons').style.display = allMktLessonsPassed ? 'none' : '';
   document.getElementById('mkt-clicks').textContent = mktState.totalClicks.toLocaleString();
   document.getElementById('mkt-conversions').textContent = mktState.totalConversions.toLocaleString();
   document.getElementById('mkt-revenue').textContent = mktState.totalRevenue.toLocaleString();
@@ -4835,6 +4914,7 @@ function renderMarketingSim() {
 
   if (mktState.phase === 1) renderMktCampaigns();
   if (mktState.phase === 2) renderMktAudience();
+  restoreMktAdInputs();
   if (mktState.phase === 3) updateMktAdTotal();
   if (mktState.phase === 4) renderMktCreatives();
   if (mktState.phase === 8) renderMktFinalScore();
@@ -4937,6 +5017,8 @@ function readMktAdSpend() {
 }
 
 function updateMktAdTotal() {
+  // الاستعادة أولاً: لا تكتب القراءة الافتراضية للحقول فوق قيم محفوظة قبل استعادتها
+  restoreMktAdInputs();
   // Once the budget is confirmed, phase 3 is locked to prevent a second deduction.
   if (mktState.budgetConfirmed) return mktState.totalSpend || 0;
 
@@ -4951,33 +5033,39 @@ function updateMktAdTotal() {
   return result.valid ? total : NaN;
 }
 
+// حقول الإنفاق في HTML قيمتها الافتراضية 0، لذلك لا تُكتب القيم من الحقول إلى الحالة قبل استعادتها.
+// الاستعادة تحدث مرة واحدة لكل تحميل للصفحة من الحالة المحفوظة؛ بعدها تكون الحقول مصدر الحقيقة في الجلسة.
+let mktAdInputsRestored = false;
+const MKT_AD_KEYS = ['facebook', 'instagram', 'tiktok', 'google'];
+function restoreMktAdInputs() {
+  if (mktAdInputsRestored) return;
+  loadMktState(); // الحالة المحفوظة أولاً، حتى لو سُبق الاستدعاء قبل فتح المحاكاة
+  mktAdInputsRestored = true;
+  if (!mktState || !mktState.adSpend) return;
+  MKT_AD_KEYS.forEach((key) => {
+    const input = document.getElementById('mkt-ad-' + key);
+    const saved = mktState.adSpend[key];
+    if (input && Number.isFinite(saved) && saved >= 0) input.value = String(saved);
+  });
+}
+
 function confirmMktBudget() {
-  if (mktState.budgetConfirmed) {
-    mktState.phase = 4;
-    saveMktState();
+  const total = updateMktAdTotal();
+  // كل قواعد الميزانية (رصيد صفر، إنفاق غير صالح، تجاوز الرصيد، خصم مرة واحدة) في lib/marketingBudget.js
+  const result = window.MarketingBudget.confirmBudget(mktState, userProgress, total);
+  const errEl = document.getElementById('mkt-error-budget');
+  if (!result.ok) {
+    errEl.textContent = window.MarketingBudget.BUDGET_MESSAGES[result.code];
+    errEl.classList.add('show');
     renderMarketingSim();
     return;
   }
-
-  const total = updateMktAdTotal();
-  const availableBudget = getMktAvailableBudget();
-  const errEl = document.getElementById('mkt-error-budget');
-  if (!Number.isFinite(total) || total <= 0 || total > availableBudget) {
-    errEl.textContent = !Number.isFinite(total)
-      ? 'الرجاء إدخال مبالغ صحيحة غير سالبة لكل منصة'
-      : 'لا يمكن أن يتجاوز الإنفاق الميزانية المتاحة، ويجب أن يكون أكبر من صفر';
-    errEl.classList.add('show');
-    return;
-  }
-
   errEl.classList.remove('show');
-  // Deduct exactly once. Returning to phase 3 after confirmation must not spend again.
-  userProgress.skillCoins = availableBudget - total;
-  safeSetItem('skillcompass_progress', userProgress);
-  mktState.totalSpend = total;
-  mktState.budget = userProgress.skillCoins;
-  mktState.budgetConfirmed = true;
-  mktState.phase = 4;
+  if (result.code === 'ok') {
+    userProgress.skillCoins = result.progress.skillCoins;
+    safeSetItem('skillcompass_progress', userProgress);
+  }
+  mktState = result.mkt;
   saveMktState();
   renderMarketingSim();
 }
@@ -5287,12 +5375,38 @@ function restartMktSimulation() {
     started: false, coinsAwarded: false, budgetConfirmed: false,
     simulationStartedAt: null, simulationResultsReady: false
   };
+  MKT_AD_KEYS.forEach((key) => { const el = document.getElementById('mkt-ad-' + key); if (el) el.value = '0'; });
+  mktAdInputsRestored = true;
   saveMktState();
   renderMarketingSim();
 }
 
 function exitMktSimulation() {
   navigateTo('page5');
+}
+
+// من رصيد صفر: ينقل إلى أول درس تسويق لم يُجتز اختباره (يحترم قفل الدروس الحالي، ولا يمنح عملات)
+function marketingLessonsRemaining() {
+  const skill = SKILL_DATABASE.marketing;
+  if (!skill || !Array.isArray(skill.lessons)) return 0;
+  const passed = new Set(userProgress.quizPassedLessons || []);
+  return skill.lessons.filter((l) => !passed.has(l.id)).length;
+}
+
+function goToMarketingLessons() {
+  const skill = SKILL_DATABASE.marketing;
+  if (!skill || userProfile.skill !== 'marketing') {
+    showToast('دروس التسويق متاحة لمسار التسويق الرقمي فقط');
+    return;
+  }
+  const passed = new Set(userProgress.quizPassedLessons || []);
+  const firstOpen = skill.lessons.findIndex((l) => !passed.has(l.id));
+  // كل الدروس مُجتازة: لا نعيد المستخدم إلى الدرس الأول، ونوضح أنه لا توجد مكافآت جديدة
+  if (firstOpen < 0) {
+    showToast('اجتزت جميع دروس التسويق، ولا توجد مكافآت دروس جديدة متاحة حالياً.');
+    return;
+  }
+  openSpecificLesson(firstOpen);
 }
 
 // =====================

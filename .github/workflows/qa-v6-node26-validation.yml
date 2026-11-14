@@ -1,0 +1,81 @@
+name: QA V6 Node 26 Validation
+
+on:
+  push:
+    branches: [qa/v6-node26-validation]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out validation branch
+        uses: actions/checkout@v4
+      - name: Set up Node.js 26
+        uses: actions/setup-node@v4
+        with:
+          node-version: 26.x
+      - name: Show runtime versions
+        run: |
+          node --version
+          npm --version
+      - name: Generate package-lock.json using npm and the public registry
+        working-directory: skillcompass-gate6-vercel
+        run: |
+          rm -f package-lock.json
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          node <<'NODE'
+          const pkg = require('./package.json');
+          const lock = require('./package-lock.json');
+          if (lock.lockfileVersion !== 3) throw new Error('Expected lockfileVersion 3');
+          if (lock.packages[''].engines?.node !== pkg.engines.node) throw new Error('Root engine mismatch');
+          for (const name of ['playwright', 'playwright-core']) {
+            const entry = lock.packages['node_modules/' + name];
+            if (!entry || entry.dev !== true) throw new Error(name + ' missing or not marked dev');
+            if (entry.version !== '1.63.0') throw new Error(name + ' must be pinned to 1.63.0');
+            if (!entry.resolved?.startsWith('https://registry.npmjs.org/')) throw new Error(name + ' must resolve from npm registry');
+            if (!entry.integrity?.startsWith('sha512-')) throw new Error(name + ' requires sha512 integrity');
+          }
+          NODE
+      - name: Install from generated lockfile
+        working-directory: skillcompass-gate6-vercel
+        run: npm ci
+      - name: Install Chromium
+        working-directory: skillcompass-gate6-vercel
+        run: npx playwright install --with-deps chromium
+      - name: Run affected unit and page tests
+        working-directory: skillcompass-gate6-vercel
+        run: node --test lib/localProfile.test.js lib/marketingBudget.test.js lib/indexPage.test.js
+      - name: Run complete CI test set with network guard
+        working-directory: skillcompass-gate6-vercel
+        env:
+          NODE_OPTIONS: --require=${{ github.workspace }}/.github/scripts/block-test-network.cjs
+        run: node --test lib/scopeGuard.test.js lib/lessonContent.test.js lib/pricingCalculator.test.js api/ai-teacher.test.js api/ai-teacher.realstream.test.js lib/localProfile.test.js lib/marketingBudget.test.js lib/indexPage.test.js
+      - name: Run browser QA on Chromium
+        working-directory: skillcompass-gate6-vercel
+        run: npm run test:e2e:qa
+      - name: Verify production-only install excludes Playwright
+        working-directory: skillcompass-gate6-vercel
+        run: |
+          npm ci --omit=dev
+          node <<'NODE'
+          for (const name of ['playwright', 'playwright-core']) {
+            try {
+              require.resolve(name);
+              throw new Error(name + ' unexpectedly exists in production install');
+            } catch (error) {
+              if (error.code !== 'MODULE_NOT_FOUND') throw error;
+            }
+          }
+          NODE
+      - name: Upload npm-generated lockfile for review
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: skillcompass-node26-package-lock
+          path: skillcompass-gate6-vercel/package-lock.json
+          if-no-files-found: ignore
+          retention-days: 7
