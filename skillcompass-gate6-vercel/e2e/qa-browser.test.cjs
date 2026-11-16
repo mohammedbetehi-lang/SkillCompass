@@ -209,6 +209,8 @@ for (const vp of VIEWPORTS) {
       await page.evaluate(() => navigateTo('page4'));
       await page.fill('#reg-name', 'سارة الجديدة');
       await page.fill('#reg-email', 'sara.new@example.com');
+      // تغيير البريد يتطلب موافقة صريحة (هوية الملف): نوافق هنا صراحة
+      page.once('dialog', (d) => d.accept());
       await page.click('text=إنشاء الملف المحلي');
       await page.waitForSelector('#page5.active', { state: 'visible' });
 
@@ -414,7 +416,8 @@ for (const vp of VIEWPORTS) {
       await page.evaluate(() => goToMarketingLessons());
       assert.equal(await page.evaluate(() => document.getElementById('page6').classList.contains('active')), false);
       assert.match(await page.locator('#app-toast').innerText(), /اجتزت جميع دروس التسويق/);
-      assert.equal(await page.evaluate(() => userProgress.skillCoins), 0);
+      // مكافأة إكمال مسار التسويق (100) تُمنح مرة واحدة عند تحميل الصفحة لمن أكمل المسار قبل التحديث
+      assert.equal(await page.evaluate(() => userProgress.skillCoins), 100);
       expectClean(report);
     } finally {
       await context.close();

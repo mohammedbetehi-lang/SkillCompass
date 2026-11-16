@@ -166,7 +166,8 @@ test('إعادة التسجيل أو تحديث الملف لا تصفر الع�
   };
   const local = seedStorage({ profile: { ...MARKETING_PROFILE, password: RAW_PASSWORD }, progress });
   const before = local.getItem(PROGRESS_KEY);
-  const { g, getEl } = loadPage({ local });
+  const { g, getEl, sandbox } = loadPage({ local });
+  sandbox.confirm = () => true; // تغيير البريد يتطلب موافقة صريحة (هوية الملف)
   getEl('reg-name').value = 'سارة الجديدة';
   getEl('reg-email').value = 'sara.new@example.com';
   g('handleRegistration()');
@@ -714,7 +715,183 @@ test('تقدم قديم مختلط بلا علامة مهارة يُحفظ دو�
 test('ملف شخصي أو تقدم يحويان نصاً بدل كائن: لا انهيار، والقيم الافتراضية تُستخدم', () => {
   const local = rawStorage({ skillcompass_profile: 'RAW:null', skillcompass_progress: 'RAW:"oops"' });
   const { g, logs } = loadPage({ local });
-  assert.equal(g('userProgress.skillCoins'), 0);
+  // المجموعة A: الرصيد المجهول لا يُعامل كصفر (انظر اختبار الرصيد التالف أدناه)
+  assert.equal(g('userProgress.skillCoins'), undefined);
   assert.deepEqual(Array.from(g('userProgress.completedLessons')), []);
-  assert.equal(logs.filter(([m]) => m === 'error').length, 0);
+  assert.equal(logs.filter(([m, t]) => m === 'error' && !t.includes('[SkillCoins]')).length, 0, 'لا انهيار؛ تشخيص SkillCoins المقصود مسموح');
+});
+
+// ───────── المجموعة A: حماية SkillCoins، هوية الملف، مكافأة مسار التسويق ─────────
+const INTEGRITY_CASES = [
+  ['{bad json', 'unreadable_json'],
+  [JSON.stringify({ completedLessons: [], quizPassedLessons: [], skillCoins: '40', lastQuizResult: null }), 'not_number'],
+  [JSON.stringify({ completedLessons: [], quizPassedLessons: [], skillCoins: -3, lastQuizResult: null }), 'negative'],
+  [JSON.stringify({ completedLessons: [], quizPassedLessons: [], skillCoins: 1.5, lastQuizResult: null }), 'not_integer'],
+  [JSON.stringify({ completedLessons: [], quizPassedLessons: [], lastQuizResult: null }), 'missing'],
+];
+
+test('تقدم محفوظ يحوي نصاً بدل كائن: لا انهيار، ولا يُستبدل الرصيد بصفر، والكتابة مُعلّقة', () => {
+  const raw = '"oops"';
+  const local = rawStorage({ skillcompass_profile: 'RAW:null', skillcompass_progress: 'RAW:' + raw });
+  const { g, logs } = loadPage({ local });
+  assert.equal(g('window.__coinsIntegrity.code'), 'not_object');
+  assert.equal(g('userProgress.skillCoins'), undefined, 'لا قيمة افتراضية تحل محل الرصيد المجهول');
+  assert.equal(g('coinsDisplay()'), '⚠');
+  assert.deepEqual(Array.from(g('userProgress.completedLessons')), []);
+  assert.equal(logs.filter(([m, t]) => m === 'error' && !t.includes('[SkillCoins]')).length, 0, 'لا أخطاء غير تشخيص SkillCoins');
+  assert.equal(local.getItem(PROGRESS_KEY), raw, 'التخزين الأصلي لم يُمس');
+});
+
+for (const [raw, code] of INTEGRITY_CASES) {
+  test(`رصيد تالف (${code}): لا إكمال درس، ولا كتابة، والتخزين الأصلي كما هو`, () => {
+    const local = rawStorage({ skillcompass_profile: MARKETING_PROFILE, skillcompass_progress: 'RAW:' + raw });
+    const { g, logs } = loadPage({ local });
+    assert.equal(g('window.__coinsIntegrity.code'), code);
+    g('completeCurrentLesson()');
+    g('submitQuiz()');
+    g('safeSetItem("skillcompass_progress", {completedLessons: [1], skillCoins: 0})');
+    assert.equal(local.getItem(PROGRESS_KEY), raw, 'لا كتابة فوق بيانات لم نفهمها');
+    assert.equal(g('(userProgress.completedLessons || []).length'), 0, 'لا إكمال');
+    assert.ok(logs.some(([m, t]) => m === 'error' && t.includes('[SkillCoins]')), 'تشخيص في الكونسول');
+  });
+}
+
+test('الرصيد التالف لا يمنح مكافأة المسار ولا يُعامل كصفر', () => {
+  const raw = JSON.stringify({ completedLessons: [1, 2, 3, 4, 5, 6, 7, 8], quizPassedLessons: [1, 2, 3, 4, 5, 6, 7, 8], skillCoins: 'abc', lastQuizResult: null, progressSkill: 'marketing' });
+  const local = rawStorage({ skillcompass_profile: { ...MARKETING_PROFILE, profileId: 'pid-x' }, skillcompass_progress: 'RAW:' + raw });
+  const { g } = loadPage({ local });
+  assert.equal(g('awardMarketingPathBonusIfEligible()'), false);
+  assert.equal(local.getItem(PROGRESS_KEY), raw, 'لا علامة ولا رصيد جديد');
+});
+
+test('كتابة تقدم من كائن لا يحمل العلامة تنقلها من التخزين (safeSetItem)', () => {
+  const record = { profileId: 'pid-x', amount: 100, grantedAt: 'x' };
+  const local = seedStorage({ profile: MARKETING_PROFILE, progress: { skillCoins: 380, marketingPathBonus: record } });
+  const { g } = loadPage({ local });
+  g('safeSetItem("skillcompass_progress", {completedLessons: [], skillCoins: 380})');
+  assert.deepEqual(JSON.parse(local.getItem(PROGRESS_KEY)).marketingPathBonus, record);
+});
+
+test('إعادة التسجيل بالبريد نفسه تحافظ على الرصيد والتقدم والعلامة', () => {
+  const record = { profileId: 'pid-x', amount: 100, grantedAt: 'x' };
+  const local = seedStorage({
+    profile: { ...MARKETING_PROFILE, profileId: 'pid-x' },
+    progress: { completedLessons: [1, 2], quizPassedLessons: [1], skillCoins: 135, lastQuizResult: null, progressSkill: 'marketing', marketingPathBonus: record },
+  });
+  const { g, getEl } = loadPage({ local });
+  getEl('reg-name').value = 'سارة';
+  getEl('reg-email').value = 'SARA@example.com';
+  g('handleRegistration()');
+  const prog = JSON.parse(local.getItem(PROGRESS_KEY));
+  assert.equal(prog.skillCoins, 135);
+  assert.deepEqual(prog.completedLessons, [1, 2]);
+  assert.deepEqual(prog.marketingPathBonus, record);
+  assert.equal(JSON.parse(local.getItem(PROFILE_KEY)).profileId, 'pid-x', 'الهوية ثابتة');
+});
+
+test('تغيير البريد في الملف نفسه بتأكيد صريح يحافظ على profileId والمكافأة', () => {
+  const record = { profileId: 'pid-x', amount: 100, grantedAt: 'x' };
+  const local = seedStorage({
+    profile: { ...MARKETING_PROFILE, profileId: 'pid-x' },
+    progress: { completedLessons: [1], quizPassedLessons: [1], skillCoins: 380, lastQuizResult: null, progressSkill: 'marketing', marketingPathBonus: record },
+  });
+  const { g, getEl, sandbox } = loadPage({ local });
+  sandbox.confirm = () => true;
+  getEl('reg-name').value = 'سارة';
+  getEl('reg-email').value = 'new@example.com';
+  g('handleRegistration()');
+  const prof = JSON.parse(local.getItem(PROFILE_KEY));
+  assert.equal(prof.email, 'new@example.com');
+  assert.equal(prof.profileId, 'pid-x');
+  assert.equal(JSON.parse(local.getItem(PROGRESS_KEY)).skillCoins, 380);
+  assert.deepEqual(JSON.parse(local.getItem(PROGRESS_KEY)).marketingPathBonus, record);
+});
+
+test('بريد مختلف دون تأكيد صريح لا يدمج الملف: لا تغيير في البريد ولا الهوية ولا الرصيد', () => {
+  const local = seedStorage({
+    profile: { ...MARKETING_PROFILE, profileId: 'pid-x' },
+    progress: { completedLessons: [1], quizPassedLessons: [1], skillCoins: 380, lastQuizResult: null, progressSkill: 'marketing' },
+  });
+  const before = { profile: local.getItem(PROFILE_KEY), progress: local.getItem(PROGRESS_KEY) };
+  const { g, getEl } = loadPage({ local });
+  getEl('reg-name').value = 'منى';
+  getEl('reg-email').value = 'mona@example.com';
+  g('handleRegistration()');
+  assert.equal(local.getItem(PROFILE_KEY), before.profile, 'الملف لم يتغير');
+  assert.equal(local.getItem(PROGRESS_KEY), before.progress, 'التقدم لم يتغير');
+});
+
+test('تأكيد الرفض صراحة يبقي الملف كما هو (confirm يعيد false)', () => {
+  const local = seedStorage({ profile: { ...MARKETING_PROFILE, profileId: 'pid-x' }, progress: { skillCoins: 5, completedLessons: [], quizPassedLessons: [], progressSkill: 'marketing' } });
+  const before = local.getItem(PROFILE_KEY);
+  const { g, getEl, sandbox } = loadPage({ local });
+  sandbox.confirm = () => false;
+  getEl('reg-name').value = 'منى';
+  getEl('reg-email').value = 'mona@example.com';
+  g('handleRegistration()');
+  assert.equal(local.getItem(PROFILE_KEY), before);
+});
+
+test('تسجيل أول مرة لملف بلا بريد لا يطلب تأكيداً', () => {
+  const local = seedStorage({ profile: { skill: 'marketing', level: 'beginner' } });
+  const { g, getEl, sandbox } = loadPage({ local });
+  let asked = false;
+  sandbox.confirm = () => { asked = true; return false; };
+  getEl('reg-name').value = 'سارة';
+  getEl('reg-email').value = 'sara@example.com';
+  g('handleRegistration()');
+  assert.equal(asked, false);
+  assert.equal(JSON.parse(local.getItem(PROFILE_KEY)).email, 'sara@example.com');
+});
+
+test('نص تأكيد تغيير البريد يوضح الملف المحلي وعدم التحقق وعدم النقل الآمن', () => {
+  const local = seedStorage({
+    profile: { ...MARKETING_PROFILE, profileId: 'pid-x' },
+    progress: { completedLessons: [1], quizPassedLessons: [1], skillCoins: 380, lastQuizResult: null, progressSkill: 'marketing' },
+  });
+  const { g, getEl, sandbox } = loadPage({ local });
+  let msg = '';
+  sandbox.confirm = (m) => { msg = String(m); return false; };
+  getEl('reg-name').value = 'سارة';
+  getEl('reg-email').value = 'new@example.com';
+  g('handleRegistration()');
+  for (const phrase of ['الملف المحلي', 'لا يتحقق التطبيق من ملكية البريد', 'ليس تسجيل دخول موثقاً', 'نقلاً آمناً بين حسابات مستقلة']) {
+    assert.ok(msg.includes(phrase), 'النص يجب أن يتضمن: ' + phrase);
+  }
+  assert.equal(local.getItem(PROFILE_KEY), JSON.stringify({ ...MARKETING_PROFILE, profileId: 'pid-x' }), 'الرفض لا يغيّر الملف');
+  assert.equal(JSON.parse(local.getItem(PROGRESS_KEY)).skillCoins, 380, 'الرفض لا يغيّر الرصيد');
+});
+
+// مكافأة المسار بعد فساد الرصيد: لا منح ولا علامة زوراً، وبعد الإصلاح تُمنح مرة واحدة فقط عبر إعادة العرض
+test('رصيد تالف عند اكتمال مسار التسويق: لا منح ولا علامة، وبعد الإصلاح تُمنح مرة واحدة فقط', () => {
+  const probe = loadPage({ local: new MemStorage() });
+  const lessonIds = Array.from(probe.g('SKILL_DATABASE.marketing.lessons.map(l => l.id)'));
+  const quizIds = Array.from(probe.g('SKILL_DATABASE.marketing.lessons.filter(l => Array.isArray(l.quiz) && l.quiz.length > 0).map(l => l.id)'));
+  assert.ok(lessonIds.length > 0 && quizIds.length > 0, 'المسار يحوي دروساً واختبارات');
+  const base = { completedLessons: lessonIds, quizPassedLessons: quizIds, lastQuizResult: null, progressSkill: 'marketing', simulationUnlocked: { marketing: true } };
+  const profile = { ...MARKETING_PROFILE, profileId: 'pid-corrupt-case' };
+
+  // (أ) الرصيد تالف: إعادة العرض لا تمنح شيئاً ولا تكتب شيئاً
+  const corrupt = JSON.stringify({ ...base, skillCoins: 'abc' });
+  const local = rawStorage({ skillcompass_profile: profile, skillcompass_progress: 'RAW:' + corrupt });
+  let page = loadPage({ local });
+  assert.equal(page.g('awardMarketingPathBonusIfEligible()'), false);
+  assert.equal(local.getItem(PROGRESS_KEY), corrupt, 'التخزين التالف لم يُمس');
+  assert.equal(page.g('coinsDisplay()'), '⚠');
+
+  // (ب) بعد إصلاح الرصيد وإعادة العرض: تُمنح المكافأة مرة واحدة
+  local.setItem(PROGRESS_KEY, JSON.stringify({ ...base, skillCoins: 40 }));
+  page = loadPage({ local });
+  assert.equal(page.g('awardMarketingPathBonusIfEligible()'), true);
+  let stored = JSON.parse(local.getItem(PROGRESS_KEY));
+  assert.equal(stored.skillCoins, 140, 'الرصيد 40 + 100');
+  assert.equal(stored.marketingPathBonus.profileId, 'pid-corrupt-case', 'العلامة مرتبطة بهوية الملف');
+  assert.equal(stored.marketingPathBonus.amount, 100);
+
+  // (ج) إعادة عرض أخرى: لا منح مجدداً ولا تغيير في الرصيد أو العلامة
+  const afterFirstGrant = local.getItem(PROGRESS_KEY);
+  page = loadPage({ local });
+  assert.equal(page.g('awardMarketingPathBonusIfEligible()'), false);
+  assert.equal(local.getItem(PROGRESS_KEY), afterFirstGrant);
+  assert.equal(JSON.parse(local.getItem(PROGRESS_KEY)).skillCoins, 140);
 });
