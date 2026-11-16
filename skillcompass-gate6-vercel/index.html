@@ -1453,7 +1453,7 @@ function render(){
  }
 
  window.SkillCompassFinance={newGame:newGame,allocate:allocate,advance:advance,phoneChoice:phoneChoice,payObligation:payObligation};
-})();</script><script src="lib/localProfile.js"></script><script src="lib/marketingBudget.js"></script><script>
+})();</script><script src="lib/localProfile.js"></script><script src="lib/marketingBudget.js"></script><script src="lib/skillCoins.js"></script><script src="lib/marketingBonus.js"></script><script>
 // =====================
 // STATE MANAGEMENT
 // =====================
@@ -1473,9 +1473,18 @@ const USER_PROGRESS_DEFAULTS = {
 try { if (window.LocalProfile) window.LocalProfile.migrateStoredProfile(localStorage); } catch (e) { /* التخزين غير متاح */ }
 let userProfile = safeGetJSON('skillcompass_profile', {});
 if (!isPlainObject(userProfile)) userProfile = {};
+// فحص الرصيد المحفوظ قبل أي قراءة أو كتابة. الرصيد التالف لا يُحوَّل إلى صفر ولا يُكتب فوقه شيء.
+window.__coinsIntegrity = window.SkillCoins
+  ? window.SkillCoins.inspectStoredProgress(localStorage.getItem('skillcompass_progress'))
+  : { ok: false, code: 'module_missing', value: undefined, detail: 'lib/skillCoins.js غير محمّل' };
 let savedUserProgress = safeGetJSON('skillcompass_progress', {});
 if (!isPlainObject(savedUserProgress)) savedUserProgress = {};
 let userProgress = { ...USER_PROGRESS_DEFAULTS, ...savedUserProgress };
+if (!window.__coinsIntegrity.ok) {
+  // القيمة الأصلية تبقى كما هي في الذاكرة، أو غائبة إن كانت غائبة؛ لا تُعوَّض بالافتراضي
+  if (Object.prototype.hasOwnProperty.call(savedUserProgress, 'skillCoins')) userProgress.skillCoins = savedUserProgress.skillCoins;
+  else delete userProgress.skillCoins;
+}
 // قيم القوائم تُتحقق قبل أي نسخ أو قراءة: null أو نص أو نوع خاطئ لا يُعطّل التحميل
 userProgress.completedLessons = toLessonIdList(userProgress.completedLessons);
 userProgress.quizPassedLessons = toLessonIdList(userProgress.quizPassedLessons);
@@ -1503,8 +1512,35 @@ let wizardSelections = {};
 // =====================
 function safeSetItem(key, value) {
   try {
+    if (key === 'skillcompass_progress') {
+      const s = window.__coinsIntegrity;
+      if (s && !s.ok) {
+        // لا كتابة فوق بيانات لم نفهمها: تبقى كما هي في التخزين
+        console.error('[SkillCoins] كتابة التقدم مُعلّقة:', s.code, s.detail);
+        return false;
+      }
+      // علامة استلام المكافأة لا تُحذف بأي كتابة تقدم لا تحملها
+      if (window.MarketingBonus) value = window.MarketingBonus.keepBonusRecord(value, localStorage.getItem(key));
+    }
     localStorage.setItem(key, JSON.stringify(value));
-  } catch (e) { console.error('localStorage error:', e); }
+    return true;
+  } catch (e) { console.error('localStorage error:', e); return false; }
+}
+
+// يمنع العملية (منح أو خصم) عند رصيد غير صالح، مع رسالة تشخيص. لا يغيّر الرصيد أبداً.
+function requireTrustedBalance(action) {
+  const s = window.__coinsIntegrity;
+  if (!s || s.ok) return true;
+  console.error('[SkillCoins] ' + action + ' متوقف:', s.code, s.detail);
+  if (typeof showToast === 'function') showToast('تعذر ' + action + ': رصيد SkillCoins المحفوظ غير صالح (' + s.code + '). لم يُفقد أي شيء، ولم تُضَف عملات أو تُخصم.');
+  return false;
+}
+
+// عرض الرصيد: يظهر علامة تحذير بدل صفر مضلل عند رصيد غير صالح
+function coinsDisplay() {
+  const s = window.__coinsIntegrity;
+  if (s && !s.ok) return '⚠';
+  return userProgress.skillCoins || 0;
 }
 function safeGetItem(key, fallback) {
   try {
@@ -1688,7 +1724,7 @@ function updateHeader() {
   const isLoggedIn = userProfile && userProfile.name;
   document.getElementById('header-coins').style.display = isLoggedIn ? 'flex' : 'none';
   document.getElementById('header-dashboard-btn').style.display = isLoggedIn ? 'block' : 'none';
-  document.getElementById('header-coin-value').textContent = userProgress.skillCoins || 0;
+  document.getElementById('header-coin-value').textContent = coinsDisplay();
 }
 
 // =====================
@@ -4022,6 +4058,8 @@ function submitAssessment() {
     return;
   }
   userProfile = {
+    // تحديث الحقول التعليمية فقط: نحتفظ بكل ما عداها (المعرّف وأي حقل آخر) ولا نبني الملف من جديد
+    ...userProfile,
     goal: wizardSelections.goal,
     skill: wizardSelections.skill,
     level: wizardSelections.level,
@@ -4029,6 +4067,7 @@ function submitAssessment() {
     name: userProfile.name || '',
     email: userProfile.email || ''
   };
+  if (window.MarketingBonus) userProfile = window.MarketingBonus.withProfileId(userProfile);
   safeSetItem('skillcompass_profile', userProfile);
   if (syncLessonProgressToSkill(userProfile.skill)) safeSetItem('skillcompass_progress', userProgress);
   renderPathSummary();
@@ -4077,9 +4116,25 @@ function handleRegistration() {
     return;
   }
 
+  // بريد مختلف عن بريد الملف الحالي: لا يُدمج الملف بصمت. يلزم تأكيد صريح من المستخدم.
+  const previousEmail = String(userProfile.email || '').trim();
+  if (previousEmail && previousEmail.toLowerCase() !== email.toLowerCase()) {
+    const confirmed = typeof confirm === 'function' && confirm(
+      'هذا الجهاز يحمل ملفاً تعليمياً محلياً مرتبطاً ببريد آخر.\n' +
+      'إن اخترت «موافق»: يُنسب الملف المحلي الحالي إلى البريد الجديد، ويبقى تقدمه ورصيده وعلامات مكافآته مرتبطة به كما هي.\n' +
+      'إن اخترت «إلغاء»: لا يتغير أي شيء في الملف أو البريد أو الرصيد.\n' +
+      'لا يتحقق التطبيق من ملكية البريد، وهذا ليس تسجيل دخول موثقاً ولا نقلاً آمناً بين حسابات مستقلة.'
+    );
+    if (!confirmed) {
+      showRegError('لم يُغيَّر البريد. لبدء ملف جديد على هذا الجهاز امسح بيانات الموقع من إعدادات المتصفح.');
+      return;
+    }
+  }
   // ملف تعليمي محلي فقط: لا تُجمع كلمة مرور ولا تُخزَّن بأي شكل
   const { password: _staleHash, ...profileWithoutPassword } = userProfile;
+  // تغيير البريد لا يغيّر هوية الملف (profileId)، فلا تُعاد مكافأة مُستلمة بسبب تغيير البريد.
   userProfile = { ...profileWithoutPassword, name, email };
+  if (window.MarketingBonus) userProfile = window.MarketingBonus.withProfileId(userProfile);
   safeSetItem('skillcompass_profile', userProfile);
 
   // تحديث بيانات الملف لا يعني إنشاء مستخدم جديد: لا تمسح العملات أو تقدم الدروس أو بيانات المحاكاة.
@@ -4347,7 +4402,7 @@ function updateDashboardUI() {
   document.getElementById('dash-welcome').textContent = 'مرحباً، ' + (userProfile.name || 'مستخدم') + '!';
   document.getElementById('dash-lessons').textContent = (userProgress.completedLessons || []).length;
   document.getElementById('dash-quizzes').textContent = (userProgress.quizPassedLessons || []).length;
-  document.getElementById('dash-coins').textContent = userProgress.skillCoins || 0;
+  document.getElementById('dash-coins').textContent = coinsDisplay();
   document.getElementById('dash-skill').textContent = skill ? skill.name : '-';
 
   const list = document.getElementById('dash-lessons-list');
@@ -4554,15 +4609,42 @@ function completeCurrentLesson() {
   if (!skill) return;
   const lesson = skill.lessons[currentLessonIndex];
   if (!lesson) return;
+  if (!requireTrustedBalance('إكمال الدرس')) return;
 
   if (!(userProgress.completedLessons || []).includes(lesson.id)) {
     userProgress.completedLessons.push(lesson.id);
     userProgress.skillCoins = (userProgress.skillCoins || 0) + 10;
     safeSetItem('skillcompass_progress', userProgress);
     showCoinFly(10);
+    awardMarketingPathBonusIfEligible();
   }
   renderLessonPage();
   renderQuizForm();
+}
+
+// مكافأة إكمال مسار التسويق (+100 مرة واحدة لكل ملف محلي). لا تُستدعى عند فتح الدرس أو زيارة الصفحة.
+// الرصيد والعلامة يُكتبان معاً في كائن التقدم بعملية تخزين واحدة (انظر lib/marketingBonus.js).
+// لا تُحدَّث الحالة في الصفحة إلا إذا نجح الحفظ وتأكد منه. يُستدعى بعد الإكمال/الاجتياز، وعند تحميل الصفحة للمستخدمين القدامى.
+function awardMarketingPathBonusIfEligible() {
+  if (!window.MarketingBonus || !SKILL_DATABASE.marketing) return false;
+  const result = window.MarketingBonus.awardPathBonus({
+    storage: localStorage,
+    profileKey: 'skillcompass_profile',
+    progressKey: 'skillcompass_progress',
+    profile: userProfile,
+    progress: userProgress,
+    skill: SKILL_DATABASE.marketing,
+    skillKey: 'marketing',
+    now: Date.now(),
+    makeId: window.MarketingBonus.newProfileId,
+  });
+  // قد يُحدَّث الملف بمعرّف مُحفوظ حتى لو فشل منح الرصيد، وهذا آمن
+  userProfile = result.profile;
+  if (!result.ok) return false;
+  userProgress = result.progress;
+  showCoinFly(result.amount);
+  showToast('🎉 أكملت مسار التسويق: +' + result.amount + ' SkillCoins');
+  return true;
 }
 
 function showCoinFly(amount) {
@@ -4660,6 +4742,7 @@ function submitQuiz() {
   if (!skill) return;
   const lesson = skill.lessons[currentLessonIndex];
   if (!lesson || !lesson.quiz) return;
+  if (!requireTrustedBalance('اجتياز الاختبار')) return;
 
   let score = 0;
   lesson.quiz.forEach((q, i) => {
@@ -4706,6 +4789,7 @@ function submitQuiz() {
       timestamp: Date.now()
     };
     safeSetItem('skillcompass_progress', userProgress);
+    awardMarketingPathBonusIfEligible();
     setTimeout(() => navigateTo('page8'), 2000);
   }
 }
@@ -4762,7 +4846,7 @@ function renderNextPlan() {
   rewards.innerHTML = `
     <div class="stats-grid" style="margin:0">
       <div class="card stat-card">
-        <div class="stat-value">${userProgress.skillCoins || 0}</div>
+        <div class="stat-value">${coinsDisplay()}</div>
         <div class="stat-label">SkillCoins 🪙</div>
       </div>
       <div class="card stat-card">
@@ -5091,6 +5175,7 @@ function restoreMktAdInputs() {
 }
 
 function confirmMktBudget() {
+  if (!requireTrustedBalance('تأكيد الميزانية')) return;
   const total = updateMktAdTotal();
   // كل قواعد الميزانية (رصيد صفر، إنفاق غير صالح، تجاوز الرصيد، خصم مرة واحدة) في lib/marketingBudget.js
   const result = window.MarketingBudget.confirmBudget(mktState, userProgress, total);
@@ -5392,6 +5477,7 @@ function renderMktFinalScore() {
     const rewardClaimed = !!userProgress.mktSimulationRewardClaimed;
     if (!rewardClaimed) {
       const coins = score >= 90 ? 60 : score >= 75 ? 40 : score >= 60 ? 20 : 0;
+      if (coins > 0 && !requireTrustedBalance('مكافأة المحاكاة')) return;
       if (coins > 0) {
         userProgress.skillCoins = (userProgress.skillCoins || 0) + coins;
         userProgress.mktSimulationRewardClaimed = true;
@@ -5456,6 +5542,8 @@ function goToMarketingLessons() {
 window.addEventListener('DOMContentLoaded', () => {
   restorePlacementReviewState();
   updateHeader();
+  // تحقق من مكافأة المسار بعد تحميل الملف والتقدم: يمنح للمستخدم الذي أكمل المسار قبل التحديث، ولا يمنح مرتين
+  awardMarketingPathBonusIfEligible();
 });
 </script>
 </body>
