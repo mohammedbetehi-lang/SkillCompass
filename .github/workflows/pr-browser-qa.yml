@@ -1,0 +1,46 @@
+name: PR Browser QA
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-browser-qa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  browser-qa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 26
+        uses: actions/setup-node@v4
+        with:
+          node-version: 26.x
+          cache: npm
+          cache-dependency-path: skillcompass-gate6-vercel/package-lock.json
+
+      - name: Show runtime versions
+        run: |
+          node --version
+          npm --version
+
+      - name: Install dependencies from the committed lockfile
+        working-directory: skillcompass-gate6-vercel
+        run: npm ci
+
+      - name: Install Chromium for Playwright
+        working-directory: skillcompass-gate6-vercel
+        run: npx playwright install --with-deps chromium
+
+      - name: Run browser QA suite
+        working-directory: skillcompass-gate6-vercel
+        run: npm run test:e2e:qa
